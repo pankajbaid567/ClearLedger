@@ -4,7 +4,7 @@ UV := $(HOME)/.local/bin/uv
 endif
 UV_CACHE_DIR ?= /tmp/clearledger-uv-cache
 
-.PHONY: doctor install db-up db-down migrate generate-demo generate-stress reconcile dev-api dev-web dev test test-unit test-python test-web test-api evaluate ablation stress-test verify-claims demo-backup secret-scan security-scan reset-demo
+.PHONY: doctor install db-up db-down migrate generate-demo generate-stress reconcile dev-api dev-web dev test test-unit test-python test-web test-api evaluate ablation stress-test verify-claims demo-backup secret-scan security-scan reset-demo lint typecheck-core test-adversarial
 
 doctor:
 	@echo "Checking ClearLedger environment..."
@@ -20,7 +20,8 @@ doctor:
 	@echo "Ready. To run pure offline tests: 'make test-unit'"
 
 install:
-	UV_CACHE_DIR=$(UV_CACHE_DIR) $(UV) sync && pnpm --dir apps/web install
+	UV_CACHE_DIR=$(UV_CACHE_DIR) $(UV) sync --frozen
+	pnpm --dir apps/web install --frozen-lockfile
 
 db-up:
 	docker compose up -d db
@@ -41,7 +42,7 @@ reconcile:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) $(UV) run python -m services.reconciliation.cli
 
 dev-api:
-	UV_CACHE_DIR=$(UV_CACHE_DIR) $(UV) run uvicorn apps.api.app.main:app --reload --port 8000
+	APP_MODE=$${APP_MODE:-local_demo} UV_CACHE_DIR=$(UV_CACHE_DIR) $(UV) run --frozen uvicorn apps.api.app.main:app --reload --host 127.0.0.1 --port 8000
 
 dev-web:
 	pnpm --dir apps/web dev
@@ -50,6 +51,17 @@ dev:
 	$(MAKE) -j2 dev-api dev-web
 
 test: test-python test-web
+
+lint:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) $(UV) run --frozen ruff check .
+
+# Deliberate strict gate for money, policy, evaluator and authentication contracts.
+# The remaining service layer is not yet covered by a clean whole-project mypy run.
+typecheck-core:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) $(UV) run --frozen mypy --follow-imports=silent packages/domain apps/api/app/auth.py apps/api/app/config.py apps/api/app/routes/auth.py evaluator/schemas.py evaluator/metrics.py evaluator/validation.py services/normalization/dates.py services/normalization/policy.py
+
+test-adversarial:
+	AI_ENABLED=false UV_CACHE_DIR=$(UV_CACHE_DIR) $(UV) run --frozen pytest evaluator/tests/test_prediction_integrity.py tests/unit/test_control_package.py tests/unit/test_auth.py
 
 test-unit:
 	AI_ENABLED=false UV_CACHE_DIR=$(UV_CACHE_DIR) $(UV) run pytest tests/unit tests/property evaluator/tests generator/tests

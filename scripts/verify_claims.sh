@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Benchmark claims must be reproducible without provider credentials or network access.
+export AI_ENABLED=false
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 UV_BIN="${UV_BIN:-$(command -v uv || true)}"

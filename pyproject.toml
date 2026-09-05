@@ -3,7 +3,7 @@ name = "clearledger"
 version = "0.1.0"
 description = "Evidence-first payment settlement controller"
 readme = "README.md"
-requires-python = ">=3.12,<3.15"
+requires-python = ">=3.13,<3.15"
 dependencies = [
     "alembic",
     "fastapi",

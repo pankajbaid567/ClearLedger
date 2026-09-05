@@ -85,7 +85,7 @@
 | Entity | Identity and principal constraints |
 |---|---|
 | `PolicyVersion` | Immutable policy ID/version pair with effective dates and checksum-backed JSON. |
-| `ReconciliationRun` | UUID; binds source checksum, policy, rule/app/AI versions, status, timings, metrics, and result checksum. |
+| `ReconciliationRun` | Immutable execution UUID; binds owner, parent execution, as-of time, source manifest, complete policy/calendar snapshot, rule/app/AI versions, durable stage progress, baseline metrics, and result checksum. |
 | `SourceFile` | One source type per run; SHA-256 checksum, byte size, row count, and quality are retained. |
 | `RawSourceRow` | Append-only uploaded values, row number, source record ID, quality, and file provenance. |
 | `IngestionIssue` | Field/value/reason/code attached to a raw row; invalid rows remain queryable. |
@@ -100,8 +100,8 @@
 | `InvariantResult` | Expected versus actual value for a named deterministic check; scoped to a case and run. |
 | `ExceptionRecord` | Structured code, severity, amount at risk, summary, missing evidence, owner, and next action. |
 | `AIAnalysis` | Bounded packet, raw/validated response, model/prompt/provider metadata, tokens, latency, cost, attempts, and rejection detail. |
-| `HumanDecision` | Typed approve/reject/defer/assign action with actor, previous/new state, reason, note, and invariant outcome. |
-| `FollowUpTask` | Case-scoped action code, required evidence, owner/status, amount at risk, and deadline. |
+| `HumanDecision` | Append-only approve/reject/defer/assign action with server-derived actor, previous/new state, execution/review revisions, reason, note, and invariant outcome. |
+| `FollowUpTask` | Run-and-case-scoped action code, required evidence, owner/status, amount at risk, and deadline. |
 | `AuditEvent` | Append-only run/case/source event with stage, severity, actor, duration, and structured details. |
 | `CashPositionSnapshot` | Five confidence buckets, known deductions, safe cash, currency, run, and calculation time. |
 | `IdempotencyRecord` | Unique operation scope/key, request hash, and exact replay response. |
@@ -130,4 +130,4 @@ the `VERIFIED` decision level.
 | Expected settlement | Captured amount not yet processed into settlement. |
 | At risk | Overdue, invalid, or materially inconsistent amount. |
 | Unresolved | Ambiguous or insufficiently evidenced amount that cannot be safely classified. |
-| Safe cash | Bank confirmed plus in-transit cash minus known refunds, disputes, and reserve holds. |
+| Safe cash | Bank-confirmed net batch movements only. Settlement components already included in net amounts are not deducted again; this is not a complete bank balance. |

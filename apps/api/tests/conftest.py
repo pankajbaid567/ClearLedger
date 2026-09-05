@@ -9,9 +9,12 @@ from pathlib import Path
 import httpx
 import psycopg
 import pytest_asyncio
+from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from apps.api.app.auth import Principal, get_principal
 from apps.api.app.dependencies import get_db_session
+from apps.api.app.idempotency import abandon_idempotency_claims
 from apps.api.app.main import app
 from db.models import Base
 
@@ -48,18 +51,26 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
 async def api_client(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[httpx.AsyncClient]:
-    async def override_session() -> AsyncIterator[AsyncSession]:
+    async def override_session(
+        principal: Principal = Depends(get_principal),
+    ) -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
+            session.info["principal"] = principal
             try:
                 yield session
                 await session.commit()
             except Exception:
                 await session.rollback()
                 raise
+            finally:
+                await abandon_idempotency_claims(session)
 
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        "demo.finance.operator", "admin", True
+    )
     app.dependency_overrides[get_db_session] = override_session
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
         yield client
     app.dependency_overrides.clear()
 

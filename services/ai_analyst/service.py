@@ -136,8 +136,10 @@ class AIAnalystService:
         self.metrics.finalize()
         return outcomes
 
-    async def analyze_single(self, case_id_value: str) -> AIAnalysisOutcome:
-        case = await self.cases.get_case(case_id_value)
+    async def analyze_single(
+        self, case_id_value: str, run_id: uuid.UUID | None = None
+    ) -> AIAnalysisOutcome:
+        case = await self.cases.get_case(case_id_value, run_id)
         if case is None:
             return AIAnalysisOutcome(
                 case_id=case_id_value,
@@ -210,7 +212,8 @@ class AIAnalystService:
                             existing_edges,
                         )
                         if all(check.passed for check in checks):
-                            await self._persist_suggestion(case, selected, selected_id, checks)
+                            async with self.session.begin_nested():
+                                await self._persist_suggestion(case, selected, selected_id, checks)
                             status = "SUGGESTED_FOR_REVIEW"
                             self.metrics.cases_improved += 1
                         else:
@@ -282,8 +285,7 @@ class AIAnalystService:
         case: DBReconciliationCase,
     ) -> tuple[ReconciliationCase, dict[str, CandidateRelationship], list[EvidenceEdge]]:
         records = [
-            NormalizedRecord.model_validate_json(json.dumps(item))
-            for item in case.record_snapshot
+            NormalizedRecord.model_validate_json(json.dumps(item)) for item in case.record_snapshot
         ]
         record_by_id = {item.entity_id: item for item in records}
         db_candidates = await self.cases.candidates_for_case(
@@ -293,9 +295,7 @@ class AIAnalystService:
         system_candidates = [
             item for item in db_candidates if item.actor_type == ActorType.SYSTEM.value
         ]
-        precomputed = [
-            self._domain_candidate(item, record_by_id) for item in system_candidates
-        ]
+        precomputed = [self._domain_candidate(item, record_by_id) for item in system_candidates]
         ambiguous = [
             domain_item
             for domain_item, db_item in zip(precomputed, system_candidates, strict=True)
@@ -357,7 +357,7 @@ class AIAnalystService:
             target_entity_id=item.target_entity_id,
             relationship_type=item.relationship_type,
             evidence_fields=item.evidence_fields,
-            match_strength_score=round(item.match_score or 0),
+            match_strength_score=(item.match_score or 0) // 100,
             rule_id=item.rule_id or "UNKNOWN_RULE",
             source_record_type=source.source_type if source else None,
             target_record_type=target.source_type if target else None,
@@ -378,8 +378,7 @@ class AIAnalystService:
             decision_level=DecisionLevel(item.decision_level),
             actor_type=ActorType(item.actor_type),
             verification_checks=[
-                VerificationCheck.model_validate(check)
-                for check in item.verification_checks or []
+                VerificationCheck.model_validate(check) for check in item.verification_checks or []
             ],
             created_at=item.created_at,
             reconciliation_run_id=str(item.reconciliation_run_id),
@@ -397,7 +396,7 @@ class AIAnalystService:
             source_entity_id=selected.source_entity_id,
             target_entity_id=selected.target_entity_id,
             relationship_type=selected.relationship_type,
-            match_score=int(selected.match_strength_score * 10000),  # Scale to 0-10000
+            match_score=selected.match_strength_score * 100,  # Scale to 0-10000
             decision_level=DecisionLevel.SUGGESTED.value,
             rejection_reason=None,
             evidence_fields=[*selected.evidence_fields, selected_id],

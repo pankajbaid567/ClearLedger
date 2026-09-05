@@ -311,3 +311,28 @@ async def test_client_timeout_returns_none_without_leaking(monkeypatch, packet) 
     assert result.failure_type == "timeout"
     assert result.attempts == 1
     assert provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_client_connection_error_retries_and_fails_closed(monkeypatch, packet) -> None:
+    request = httpx.Request("POST", "https://provider.invalid/v1/chat/completions")
+    provider = _FakeOpenAI(
+        [
+            openai.APIConnectionError(request=request),
+            openai.APIConnectionError(request=request),
+        ]
+    )
+    monkeypatch.setattr(
+        "services.ai_analyst.client.openai.AsyncOpenAI",
+        lambda **kwargs: provider,
+    )
+    client = OpenAICompatibleClient(
+        AIClientConfig(enabled=True, provider="test", model="fake", api_key="test")
+    )
+
+    result = await client.analyze_case(packet.case_id, packet)
+
+    assert result.response is None
+    assert result.failure_type == "provider_error"
+    assert result.attempts == 2
+    assert provider.closed is True

@@ -11,6 +11,7 @@ export type DataTableColumn<T> = {
   render: (row: T) => React.ReactNode;
   sortValue?: (row: T) => string | number;
   className?: string;
+  compact?: boolean;
 };
 
 export function DataTable<T>({
@@ -24,6 +25,8 @@ export function DataTable<T>({
   filterPlaceholder = "Filter table",
   emptyMessage = "No records match the current filters.",
   testId,
+  query: controlledQuery,
+  onQueryChange,
 }: {
   rows: T[];
   columns: DataTableColumn<T>[];
@@ -35,8 +38,12 @@ export function DataTable<T>({
   filterPlaceholder?: string;
   emptyMessage?: string;
   testId?: string;
+  query?: string;
+  onQueryChange?: (query: string) => void;
 }) {
-  const [query, setQuery] = useState("");
+  const [localQuery, setLocalQuery] = useState("");
+  const query = controlledQuery ?? localQuery;
+  const setQuery = onQueryChange ?? setLocalQuery;
   const [page, setPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(pageSize);
   const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
@@ -122,8 +129,14 @@ export function DataTable<T>({
           </span>
         </div>
       ) : null}
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[940px] border-collapse text-left text-[0.73rem]">
+      <div className="space-y-3 p-3 md:hidden" aria-label="Compact records">
+        {visibleRows.map((row) => <article className="rounded-lg border border-slate-200 bg-white p-3" key={getRowKey(row)}>
+          <dl className="space-y-2">{columns.filter((c) => c.compact || columns.filter((x) => x.compact).length === 0).slice(0, 5).map((column) => <div className="flex items-start justify-between gap-3 text-xs" key={column.key}><dt className="text-slate-500">{column.label}</dt><dd className="m-0 text-right">{column.render(row)}</dd></div>)}</dl>
+          {onRowClick ? <button type="button" className="btn btn-secondary mt-3 w-full" onClick={() => onRowClick(row)}>Inspect {getRowKey(row)}</button> : null}
+        </article>)}
+      </div>
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full min-w-[680px] border-collapse text-left text-[0.73rem]">
           <thead className="sticky top-0 z-10">
             <tr className="border-b border-[#e2e8f0] bg-[#f8fafc] text-[#475569] text-[0.68rem] font-bold uppercase tracking-wider">
               {columns.map((column) => {
@@ -170,18 +183,11 @@ export function DataTable<T>({
                 data-row-key={getRowKey(row)}
                 key={getRowKey(row)}
                 onClick={() => onRowClick?.(row)}
-                onKeyDown={(event) => {
-                  if (onRowClick && (event.key === "Enter" || event.key === " ")) {
-                    event.preventDefault();
-                    onRowClick(row);
-                  }
-                }}
-                role={onRowClick ? "button" : undefined}
-                tabIndex={onRowClick ? 0 : undefined}
+
               >
-                {columns.map((column) => (
+                {columns.map((column, columnIndex) => (
                   <td className={`px-4 py-3.5 align-middle text-[#334155] ${column.className ?? ""}`} key={column.key}>
-                    {column.render(row)}
+                    {onRowClick && columnIndex === 0 ? <button className="text-left underline decoration-slate-300 underline-offset-4 focus-visible:outline-2 focus-visible:outline-blue-600" type="button" aria-label={`Inspect ${getRowKey(row)}`} onClick={(event) => { event.stopPropagation(); onRowClick(row); }}>{column.render(row)}</button> : column.render(row)}
                   </td>
                 ))}
               </tr>
@@ -229,8 +235,8 @@ export function DataTable<T>({
             >
               <ChevronLeft aria-hidden="true" size={14} />
             </button>
-            <span className="px-2 font-mono text-[0.69rem] font-bold text-[#0f172a]">
-              {currentPage} / {pages}
+            <span className="px-2 text-[0.69rem] font-bold text-[#0f172a]" data-testid="pagination-status" role="status" aria-live="polite">
+              {pages === 1 ? `All ${filtered.length} matching records` : `Page ${currentPage} of ${pages}`}
             </span>
             <button
               aria-label="Next page"

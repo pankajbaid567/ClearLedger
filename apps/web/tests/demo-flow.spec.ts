@@ -1,4 +1,4 @@
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { expect, test } from "@playwright/test";
@@ -24,7 +24,7 @@ test.describe("ClearLedger demo operations loop", () => {
 
     await expect(page.getByTestId("control-room")).toBeVisible();
     await expect(page.getByTestId("metric-total-cases")).toContainText("75");
-    await expect(page.getByText("Precision", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Baseline Precision", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Cash by confidence", { exact: true })).toBeVisible();
   });
 
@@ -72,7 +72,15 @@ test.describe("ClearLedger demo operations loop", () => {
   test("filters the queue to actionable exceptions", async ({ page }) => {
     await page.goto(`/runs/${runId}/cases`);
     await page.getByText("State", { exact: true }).click();
-    await page.getByLabel("Actionable Exception").check({ force: true });
+    const actionable = page.getByRole("checkbox", {
+      name: "Actionable Exception",
+      exact: true,
+    });
+    await actionable.click({ force: true });
+    await expect(page).toHaveURL(/state=ACTIONABLE_EXCEPTION/);
+    await expect(
+      page.getByRole("checkbox", { name: "Actionable Exception", exact: true }),
+    ).toBeChecked();
 
     const rows = page.getByTestId("cases-table").locator("tbody tr");
     await expect(rows.first()).toBeVisible();
@@ -158,10 +166,29 @@ test.describe("ClearLedger demo operations loop", () => {
     expect((await stat(path as string)).size).toBeGreaterThan(0);
   });
 
+  test("downloads the control package with a separate digest sidecar", async ({ page }) => {
+    await page.goto(`/runs/${runId}`);
+    const downloads: import("@playwright/test").Download[] = [];
+    page.on("download", (download) => downloads.push(download));
+    await page.getByTestId("download-control-package").click();
+    await expect.poll(() => downloads.length).toBe(2);
+    const packageDownload = downloads.find((item) => !item.suggestedFilename().endsWith(".sha256"));
+    const digestDownload = downloads.find((item) => item.suggestedFilename().endsWith(".sha256"));
+    expect(packageDownload).toBeDefined();
+    expect(digestDownload).toBeDefined();
+    const packagePath = await packageDownload!.path();
+    const digestPath = await digestDownload!.path();
+    const artifact = JSON.parse(await readFile(packagePath!, "utf8")) as { sha256: string };
+    const sidecar = (await readFile(digestPath!, "utf8")).trim().split(/\s+/)[0];
+    expect(sidecar).toMatch(/^[0-9a-f]{64}$/);
+    expect(sidecar).toBe(artifact.sha256);
+    await expect(page.getByText(`Separate SHA-256 saved: ${sidecar}`)).toBeVisible();
+  });
+
   test("keeps cash and case workflows usable at compact widths", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.goto(`/runs/${runId}/cash`);
-    await expect(page.getByText("Safe Cash Now", { exact: true })).toBeVisible();
+    await expect(page.getByText("Confirmed batch receipts", { exact: true })).toBeVisible();
     await expect(page.getByText("Near-Term Controlled", { exact: true })).toBeVisible();
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
@@ -174,7 +201,11 @@ test.describe("ClearLedger demo operations loop", () => {
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true);
-    await page.getByTestId("cases-table").locator("tbody tr").first().click();
+    await page
+      .getByLabel("Compact records")
+      .getByRole("button", { name: /^Inspect / })
+      .first()
+      .click();
     await expect(page.getByTestId("evidence-drawer")).toBeVisible();
     await expect(page.getByRole("button", { name: "Close evidence drawer" })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("case-mobile.png"), fullPage: true });
@@ -196,12 +227,17 @@ test.describe("ClearLedger demo operations loop", () => {
     await page.goto(`/runs/${runId}/cases?state=ACTIONABLE_EXCEPTION`);
     await expect(page.getByTestId("cases-table")).toBeVisible();
     await page.screenshot({ path: resolve(screenshotDir, "03-cases.png"), fullPage: true });
-    await page.getByTestId("cases-table").locator("tbody tr").first().click();
+    await page
+      .getByTestId("cases-table")
+      .locator("tbody")
+      .getByRole("button", { name: /^Inspect / })
+      .first()
+      .click();
     await expect(page.getByTestId("evidence-drawer")).toBeVisible();
     await page.screenshot({ path: resolve(screenshotDir, "04-evidence.png") });
 
     await page.goto(`/runs/${runId}/cash`);
-    await expect(page.getByText("Safe Cash Now", { exact: true })).toBeVisible();
+    await expect(page.getByText("Confirmed batch receipts", { exact: true })).toBeVisible();
     await page.screenshot({ path: resolve(screenshotDir, "05-cash.png"), fullPage: true });
 
     await page.goto(`/runs/${runId}/audit`);

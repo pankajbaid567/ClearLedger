@@ -6,17 +6,18 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from apps.api.app.auth import get_principal
 from apps.api.app.config import settings
 from apps.api.app.errors import APIError
 from apps.api.app.middleware.correlation import CorrelationIdMiddleware
-from apps.api.app.routes import ai, cases, cash, exports, review, runs
+from apps.api.app.routes import ai, auth, cases, cash, exports, review, runs
 from db.session import configure_database, dispose_database, get_engine
 from services.reconciliation.run_service import RunServiceError
 
@@ -46,9 +47,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.web_origin],
     allow_origin_regex=(
-        r"^http://localhost:\d+$" if settings.app_env == "development" else None
+        r"^http://(?:localhost|127\.0\.0\.1):\d+$"
+        if settings.app_mode == "local_demo"
+        else None
     ),
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -146,7 +149,8 @@ async def unhandled_error_handler(request: Request, _: Exception) -> JSONRespons
 
 
 for router in (runs.router, cases.router, review.router, exports.router, cash.router, ai.router):
-    app.include_router(router)
+    app.include_router(router, dependencies=[Depends(get_principal)])
+app.include_router(auth.router)
 
 
 @app.get("/health", tags=["system"])

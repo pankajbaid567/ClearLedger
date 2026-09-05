@@ -5,22 +5,26 @@ from __future__ import annotations
 import asyncio
 import csv
 import hashlib
+import inspect
 import io
 import json
+import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from fastapi import UploadFile
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text, update
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from db.models import ReconciliationRun, SourceFile
+from db.models import FollowUpTask, HumanDecision, ReconciliationCase, ReconciliationRun, SourceFile
 from db.repositories import (
     AuditRepository,
     CaseRepository,
     EntityRepository,
+    ReviewRepository,
     RunRepository,
     SourceRepository,
 )
@@ -54,6 +58,8 @@ REQUIRED_SOURCE_TYPES = frozenset(
     {"orders", "payments", "settlements", "settlement_components", "bank_transactions"}
 )
 APP_VERSION = "0.1.0"
+EXECUTION_LEASE_SECONDS = 30
+EXECUTION_HEARTBEAT_SECONDS = 10
 
 
 class RunServiceError(Exception):
@@ -94,6 +100,9 @@ class ValidationResult(BaseModel):
     files: list[FileValidation] = Field(default_factory=list)
     total_rows: int = 0
     invalid_rows: int = 0
+    required_sources_present: bool = False
+    processing_permitted: bool = False
+    all_rows_valid: bool = False
 
 
 def _sha256(data: bytes) -> str:
@@ -148,8 +157,10 @@ class RunService:
         max_upload_bytes: int = 10 * 1024 * 1024,
         ai_config: AIClientConfig | None = None,
         ai_client: AIAnalyzerClient | None = None,
+        owner_subject: str | None = None,
     ) -> None:
         self.session = session
+        self.owner_subject = owner_subject
         self.upload_dir = Path(upload_dir)
         self.policy_path = Path(policy_path) if policy_path else None
         self.max_upload_bytes = max_upload_bytes
@@ -161,7 +172,34 @@ class RunService:
         self.cases = CaseRepository(session)
         self.audit = AuditRepository(session)
 
-    async def create_run(self, policy_version_id: uuid.UUID | None = None) -> ReconciliationRun:
+    async def create_run(
+        self,
+        policy_version_id: uuid.UUID | None = None,
+        *,
+        parent_run_id: uuid.UUID | None = None,
+        as_of_at: datetime | None = None,
+    ) -> ReconciliationRun:
+        parent = await self._locked_run(parent_run_id) if parent_run_id else None
+        if as_of_at is not None and as_of_at.tzinfo is None:
+            raise RunServiceError("INVALID_AS_OF", "as_of_at must include a timezone.")
+        if parent is not None:
+            if parent.status not in {"COMPLETED", "FAILED"}:
+                raise RunServiceError(
+                    "PARENT_EXECUTION_NOT_FROZEN",
+                    "A successor can be created only from a completed or failed execution.",
+                    status_code=409,
+                    details={"parent_run_id": str(parent.id), "status": parent.status},
+                )
+            existing_child = await self.runs.get_child(parent.id)
+            if existing_child is not None:
+                raise RunServiceError(
+                    "SUCCESSOR_ALREADY_EXISTS",
+                    "This execution already has a successor. Continue that versioned run.",
+                    status_code=409,
+                    details={"successor_run_id": str(existing_child.id)},
+                )
+        if parent is not None and policy_version_id is None:
+            policy_version_id = parent.policy_version_id
         if policy_version_id is None:
             policy_version_id = (await self._ensure_default_policy()).id
         elif await self.runs.get_policy(policy_version_id) is None:
@@ -172,7 +210,16 @@ class RunService:
                 details={"policy_version_id": str(policy_version_id)},
             )
 
+        policy_record = await self.runs.get_policy(policy_version_id)
+        if policy_record is None:
+            raise RunServiceError("POLICY_NOT_FOUND", "The run policy is unavailable.")
         run = await self.runs.create(
+            owner_subject=self.owner_subject,
+            parent_run_id=parent_run_id,
+            execution_revision=(parent.execution_revision + 1 if parent else 1),
+            review_revision=0,
+            as_of_at=as_of_at or datetime.now(UTC),
+            policy_snapshot=policy_record.policy_data,
             policy_version_id=policy_version_id,
             status="CREATED",
             rule_set_version=RULE_VERSION,
@@ -183,29 +230,44 @@ class RunService:
                 "required_source_types": sorted(REQUIRED_SOURCE_TYPES),
                 "ai_enabled": self.ai_config.enabled,
                 "ai_provider": self.ai_config.provider,
+                "review_carry_forward": (
+                    {
+                        "source_run_id": str(parent.id),
+                        "mode": "unchanged-evidence-ownership-and-open-tasks",
+                        "status": "pending_execution",
+                    }
+                    if parent is not None
+                    else None
+                ),
             },
         )
         await self.audit.create(
             reconciliation_run_id=run.id,
             event_type="RUN_CREATED",
             stage="creation",
-            actor="SYSTEM",
-            details={"policy_version_id": str(policy_version_id)},
+            actor=self.owner_subject or "SYSTEM",
+            details={
+                "policy_version_id": str(policy_version_id),
+                "parent_run_id": str(parent.id) if parent else None,
+                "execution_revision": run.execution_revision,
+            },
         )
         return run
 
     async def add_files_to_run(
         self, run_id: uuid.UUID, files: dict[str, UploadFile]
     ) -> list[SourceFile]:
-        run = await self._require_run(run_id)
-        if run.status in {"RECONCILING"}:
+        run = await self._locked_run(run_id)
+        if run.status in {"RECONCILING", "COMPLETED", "FAILED"}:
             raise RunServiceError(
                 "INVALID_STATE_TRANSITION",
-                "Files cannot be changed while reconciliation is running.",
+                "This execution is frozen. Create a successor run to supply new evidence.",
                 status_code=409,
                 details={"run_id": str(run_id), "current_state": run.status},
             )
 
+        if not files:
+            raise RunServiceError("NO_FILES", "At least one CSV source file is required.")
         run_dir = self.upload_dir / str(run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
         uploaded: list[SourceFile] = []
@@ -222,7 +284,7 @@ class RunService:
                     "Only CSV source files are accepted.",
                     details={"filename": upload.filename, "source_type": source_type},
                 )
-            data = await upload.read()
+            data = await upload.read(self.max_upload_bytes + 1)
             if len(data) > self.max_upload_bytes:
                 raise RunServiceError(
                     "FILE_TOO_LARGE",
@@ -263,7 +325,9 @@ class RunService:
                 ) from exc
 
             path = run_dir / f"{source_type}.csv"
-            path.write_bytes(data)
+            temporary_path = run_dir / f".{source_type}.{uuid.uuid4().hex}.tmp"
+            temporary_path.write_bytes(data)
+            temporary_path.replace(path)
             source_file = await self.sources.create(
                 filename=upload.filename or path.name,
                 source_type=source_type,
@@ -278,7 +342,7 @@ class RunService:
                 source_file_id=source_file.id,
                 event_type="SOURCE_FILE_ADDED",
                 stage="upload",
-                actor="SYSTEM",
+                actor=self.owner_subject or "SYSTEM",
                 details={
                     "source_type": source_type,
                     "filename": upload.filename,
@@ -301,13 +365,27 @@ class RunService:
             run,
             status="FILES_UPLOADED",
             dataset_checksum=dataset_checksum,
+            input_manifest=dataset_manifest,
             total_source_rows=sum(item.row_count or 0 for item in all_files),
             config={**run.config, "dataset_id": dataset_manifest["dataset_id"]},
         )
         return uploaded
 
-    async def validate_run(self, run_id: uuid.UUID) -> ValidationResult:
-        run = await self._require_run(run_id)
+    async def validate_run(self, run_id: uuid.UUID, *, internal: bool = False) -> ValidationResult:
+        run = await self._locked_run(run_id)
+        if run.status == "COMPLETED":
+            if run.config.get("validation"):
+                return ValidationResult.model_validate_json(json.dumps(run.config["validation"]))
+            raise RunServiceError(
+                "IMMUTABLE_EXECUTION", "This completed execution is frozen.", status_code=409
+            )
+        if run.status in {"RECONCILING", "FAILED"} and not internal:
+            raise RunServiceError(
+                "INVALID_STATE_TRANSITION",
+                "This execution is frozen; create a successor run.",
+                status_code=409,
+            )
+
         source_files = await self.sources.list_for_run(run_id)
         by_type = {item.source_type: item for item in source_files}
         missing = sorted(REQUIRED_SOURCE_TYPES - by_type.keys())
@@ -318,6 +396,7 @@ class RunService:
 
             for source_type in sorted(REQUIRED_SOURCE_TYPES):
                 source_file = by_type[source_type]
+                self._verify_source_hash(run_id, source_file)
                 result = await asyncio.to_thread(
                     ingest_file, str(self._file_path(run_id, source_type)), source_type
                 )
@@ -352,7 +431,13 @@ class RunService:
         )
         await self.runs.update(
             run,
-            status="READY_FOR_RECONCILIATION" if valid else "VALIDATION_FAILED",
+            status=(
+                "RECONCILING"
+                if internal and valid
+                else "READY_FOR_RECONCILIATION"
+                if valid
+                else "VALIDATION_FAILED"
+            ),
             failure_reason=(
                 None if valid else "Missing required files or one or more files failed validation."
             ),
@@ -364,83 +449,289 @@ class RunService:
             files=validations,
             total_rows=sum(item.row_count for item in validations),
             invalid_rows=invalid_rows,
+            required_sources_present=not missing,
+            processing_permitted=valid,
+            all_rows_valid=valid and invalid_rows == 0,
         )
+        run.config = {**run.config, "validation": result.model_dump(mode="json")}
         await self.audit.create(
             reconciliation_run_id=run_id,
             event_type="RUN_VALIDATED",
             stage="validation",
             severity="INFO" if valid else "ERROR",
-            actor="SYSTEM",
+            actor=self.owner_subject or "SYSTEM",
             details=result.model_dump(mode="json"),
         )
         return result
 
-    async def execute_reconciliation(self, run_id: uuid.UUID) -> ReconciliationResult:
-        run = await self.runs.get_for_update(run_id)
-        if run is None:
-            raise self._not_found(run_id)
-        validation = await self.validate_run(run_id)
-        if not validation.valid:
-            raise RunServiceError(
-                "RUN_VALIDATION_FAILED",
-                "The run must have all required source files and valid schemas.",
-                status_code=409,
-                details=validation.model_dump(mode="json"),
+    async def execute_reconciliation(self, run_id: uuid.UUID) -> ReconciliationResult | None:
+        """Execute once; a completed run is an immutable baseline with mutable reviews."""
+        run = await self._locked_run(run_id)
+        if run.status == "COMPLETED":
+            return None
+        now = datetime.now(UTC)
+        if run.status == "RECONCILING":
+            if run.execution_lease_expires_at is None or run.execution_lease_expires_at > now:
+                raise RunServiceError(
+                    "RUN_EXECUTION_IN_PROGRESS",
+                    "Execution is already running.",
+                    status_code=409,
+                    details={"run_id": str(run_id), "stage": run.stage},
+                )
+            await self.runs.update(
+                run,
+                status="FAILED",
+                stage="abandoned",
+                completed_at=now,
+                execution_attempt_token=None,
+                execution_lease_expires_at=None,
+                failure_reason="The previous worker stopped renewing its execution lease.",
             )
-
-        policy = await self._policy_for_run(run)
-        source_files = {
-            source_type: str(self._file_path(run_id, source_type))
-            for source_type in REQUIRED_SOURCE_TYPES
-        }
-        started_at = datetime.now(UTC)
+            await self.audit.create(
+                reconciliation_run_id=run_id,
+                event_type="RECONCILIATION_ABANDONED",
+                stage="orchestration",
+                severity="ERROR",
+                actor="SYSTEM",
+                details={"recovery": "create_successor"},
+            )
+            await self.session.commit()
+            raise RunServiceError(
+                "RUN_EXECUTION_ABANDONED",
+                "The previous execution lease expired. Its partial evidence is frozen; "
+                "create a successor run.",
+                status_code=409,
+                details={"run_id": str(run_id), "recovery": "create_successor"},
+            )
+        if run.status == "FAILED":
+            raise RunServiceError(
+                "RUN_EXECUTION_FROZEN",
+                "This execution failed and is frozen. Create a successor for a new execution.",
+                status_code=409,
+                details={"run_id": str(run_id), "status": run.status},
+            )
+        started = time.perf_counter()
+        attempt_token = uuid.uuid4().hex
         await self.runs.update(
             run,
             status="RECONCILING",
-            started_at=started_at,
+            stage="validation",
+            progress_percent=2,
+            started_at=datetime.now(UTC),
             completed_at=None,
             failure_reason=None,
+            execution_attempt_token=attempt_token,
+            execution_lease_expires_at=now + timedelta(seconds=EXECUTION_LEASE_SECONDS),
         )
         await self.audit.create(
             reconciliation_run_id=run_id,
             event_type="RECONCILIATION_STARTED",
-            stage="orchestration",
-            actor="SYSTEM",
-            details={"dataset_checksum": run.dataset_checksum},
+            stage="validation",
+            actor=self.owner_subject or "SYSTEM",
+            details={
+                "dataset_checksum": run.dataset_checksum,
+                "execution_revision": run.execution_revision,
+            },
         )
-
+        await self.session.commit()
+        heartbeat = asyncio.create_task(self._execution_heartbeat(run_id, attempt_token))
         try:
-            result = await asyncio.to_thread(run_reconciliation, source_files, policy, str(run_id))
-            await self._persist_result(run, result)
-            await self._run_ai_stage(run, result, policy)
-            await self.session.flush()
-            return result
-        except Exception as exc:
-            await self.session.rollback()
-            failed_run = await self.runs.get(run_id)
-            if failed_run is not None:
-                await self.runs.update(
-                    failed_run,
-                    status="FAILED",
-                    completed_at=datetime.now(UTC),
-                    failure_reason=str(exc)[:1000],
+            validation = await self.validate_run(run_id, internal=True)
+            if not validation.valid:
+                raise RunServiceError(
+                    "RUN_VALIDATION_FAILED",
+                    "Required source files or valid schemas are missing.",
+                    status_code=409,
+                    details=validation.model_dump(mode="json"),
                 )
+            policy = await self._policy_for_run(run)
+            source_files = {
+                kind: str(self._file_path(run_id, kind)) for kind in REQUIRED_SOURCE_TYPES
+            }
+            await self._record_progress(run_id, "ingestion", 10, 0, attempt_token)
+            loop = asyncio.get_running_loop()
+            stage_percent = {
+                "ingestion": 10,
+                "normalization": 25,
+                "candidate_generation": 40,
+                "matching_rules": 55,
+                "verification_classification": 65,
+                "cash_position": 75,
+            }
+
+            def on_stage(stage: str, processed_records: int) -> None:
+                asyncio.run_coroutine_threadsafe(
+                    self._record_progress(
+                        run_id,
+                        stage,
+                        stage_percent.get(stage, 70),
+                        processed_records,
+                        attempt_token,
+                    ),
+                    loop,
+                ).result()
+
+            kwargs = (
+                {"on_stage": on_stage}
+                if "on_stage" in inspect.signature(run_reconciliation).parameters
+                else {}
+            )
+            result = await asyncio.to_thread(
+                run_reconciliation, source_files, policy, str(run_id), **kwargs
+            )
+            await self._record_progress(
+                run_id, "persistence", 80, result.total_source_records, attempt_token
+            )
+            await self._persist_result(run, result)
+            await self._carry_forward_review_state(run)
+            await self._record_progress(
+                run_id,
+                "ai_exception_analysis",
+                90,
+                result.total_source_records,
+                attempt_token,
+            )
+            await self._run_ai_stage(run, result, policy, attempt_token)
+            duration_ms = round((time.perf_counter() - started) * 1000)
+            completion = await self.session.execute(
+                update(ReconciliationRun)
+                .where(
+                    ReconciliationRun.id == run_id,
+                    ReconciliationRun.status == "RECONCILING",
+                    ReconciliationRun.execution_attempt_token == attempt_token,
+                )
+                .values(
+                    status="COMPLETED",
+                    stage="completed",
+                    progress_percent=100,
+                    processed_records=result.total_source_records,
+                    completed_at=datetime.now(UTC),
+                    duration_ms=duration_ms,
+                    execution_attempt_token=None,
+                    execution_lease_expires_at=None,
+                    metrics={**run.metrics, "end_to_end_duration_ms": duration_ms},
+                )
+            )
+            if completion.rowcount != 1:
+                raise RunServiceError(
+                    "EXECUTION_LEASE_LOST",
+                    "This worker no longer owns the execution lease.",
+                    status_code=409,
+                    details={"run_id": str(run_id)},
+                )
+            await self.session.commit()
+            return result
+        except BaseException as exc:
+            await self.session.rollback()
+            failure = await self.session.execute(
+                update(ReconciliationRun)
+                .where(
+                    ReconciliationRun.id == run_id,
+                    ReconciliationRun.status == "RECONCILING",
+                    ReconciliationRun.execution_attempt_token == attempt_token,
+                )
+                .values(
+                    status="FAILED",
+                    stage="failed",
+                    completed_at=datetime.now(UTC),
+                    execution_attempt_token=None,
+                    execution_lease_expires_at=None,
+                    failure_reason=(
+                        f"{type(exc).__name__}: execution failed; see correlated audit event"
+                    ),
+                )
+            )
+            if failure.rowcount == 1:
                 await self.audit.create(
                     reconciliation_run_id=run_id,
                     event_type="RECONCILIATION_FAILED",
                     stage="orchestration",
                     severity="ERROR",
                     actor="SYSTEM",
-                    details={"error_type": type(exc).__name__, "message": str(exc)[:1000]},
+                    details={"error_type": type(exc).__name__},
                 )
                 await self.session.commit()
             raise
+        finally:
+            heartbeat.cancel()
+            await heartbeat
+
+    async def _record_progress(
+        self,
+        run_id: uuid.UUID,
+        stage: str,
+        percent: int,
+        rows: int,
+        attempt_token: str,
+    ) -> None:
+        progress = await self.session.execute(
+            update(ReconciliationRun)
+            .where(
+                ReconciliationRun.id == run_id,
+                ReconciliationRun.status == "RECONCILING",
+                ReconciliationRun.execution_attempt_token == attempt_token,
+            )
+            .values(
+                stage=stage,
+                progress_percent=percent,
+                processed_records=rows,
+                execution_lease_expires_at=(
+                    datetime.now(UTC) + timedelta(seconds=EXECUTION_LEASE_SECONDS)
+                ),
+            )
+        )
+        if progress.rowcount != 1:
+            await self.session.rollback()
+            raise RunServiceError(
+                "EXECUTION_LEASE_LOST",
+                "This worker no longer owns the execution lease.",
+                status_code=409,
+                details={"run_id": str(run_id)},
+            )
+        await self.audit.create(
+            reconciliation_run_id=run_id,
+            event_type="EXECUTION_PROGRESS",
+            stage=stage,
+            actor="SYSTEM",
+            details={"progress_percent": percent, "processed_records": rows},
+        )
+        await self.session.commit()
+
+    async def _execution_heartbeat(self, run_id: uuid.UUID, attempt_token: str) -> None:
+        """Renew a persisted worker lease without retaining a pool connection."""
+        bind = self.session.bind
+        if bind is None:
+            return
+        engine = bind if isinstance(bind, AsyncEngine) else bind.engine
+        try:
+            while True:
+                await asyncio.sleep(EXECUTION_HEARTBEAT_SECONDS)
+                lease = datetime.now(UTC) + timedelta(seconds=EXECUTION_LEASE_SECONDS)
+                async with engine.begin() as connection:
+                    result = await connection.execute(
+                        update(ReconciliationRun)
+                        .where(
+                            ReconciliationRun.id == run_id,
+                            ReconciliationRun.status == "RECONCILING",
+                            ReconciliationRun.execution_attempt_token == attempt_token,
+                        )
+                        .values(execution_lease_expires_at=lease)
+                    )
+                if result.rowcount != 1:
+                    return
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            # The durable lease expires and a subsequent request marks the attempt
+            # abandoned. The worker cannot silently regain ownership after that.
+            return
 
     async def _run_ai_stage(
         self,
         run: ReconciliationRun,
         result: ReconciliationResult,
         policy: SettlementPolicy,
+        attempt_token: str,
     ) -> None:
         eligible_cases = select_ai_analysis_cases(result.cases)[: self.ai_config.max_cases_per_run]
         eligible_ids = [case.case_id for case in eligible_cases]
@@ -484,13 +775,27 @@ class RunService:
                 "deterministic_plus_ai": {"cases_by_state": assisted_states},
             },
         }
-        await self.runs.update(
-            current_run,
-            status="COMPLETED",
-            metrics=metrics,
-            ai_model=self.ai_config.model or None,
-            ai_prompt_version=self.ai_config.prompt_version,
+        fenced = await self.session.execute(
+            update(ReconciliationRun)
+            .where(
+                ReconciliationRun.id == run.id,
+                ReconciliationRun.status == "RECONCILING",
+                ReconciliationRun.execution_attempt_token == attempt_token,
+            )
+            .values(
+                metrics=metrics,
+                ai_model=self.ai_config.model or None,
+                ai_prompt_version=self.ai_config.prompt_version,
+            )
         )
+        if fenced.rowcount != 1:
+            raise RunServiceError(
+                "EXECUTION_LEASE_LOST",
+                "This worker no longer owns the execution lease.",
+                status_code=409,
+                details={"run_id": str(run.id)},
+            )
+        run.metrics = metrics
         await self.audit.create(
             reconciliation_run_id=run.id,
             event_type="AI_STAGE_COMPLETED" if self.ai_config.enabled else "AI_STAGE_SKIPPED",
@@ -507,6 +812,180 @@ class RunService:
             },
         )
 
+    async def _carry_forward_review_state(self, run: ReconciliationRun) -> None:
+        """Carry unchanged case ownership/tasks with append-only provenance.
+
+        Financial dispositions are deliberately re-derived by the new execution.
+        Only an explicit assignment backed by identical policy, inputs, baseline
+        result, and case evidence can cross the execution boundary.
+        """
+        if run.parent_run_id is None:
+            return
+        parent = await self.runs.get(run.parent_run_id)
+        unchanged_baseline = bool(
+            parent
+            and parent.status == "COMPLETED"
+            and parent.dataset_checksum
+            and parent.dataset_checksum == run.dataset_checksum
+            and parent.policy_snapshot == run.policy_snapshot
+            and parent.result_checksum
+            and parent.result_checksum == run.result_checksum
+        )
+        report: dict[str, Any] = {
+            "source_run_id": str(run.parent_run_id),
+            "mode": "unchanged-evidence-ownership-and-open-tasks",
+            "carried": [],
+            "carried_tasks": [],
+            "skipped": [],
+        }
+        if not unchanged_baseline or parent is None:
+            report.update(status="skipped", reason="baseline_changed_or_parent_incomplete")
+            run.config = {**run.config, "review_carry_forward": report}
+            await self.audit.create(
+                reconciliation_run_id=run.id,
+                event_type="REVIEW_CARRY_FORWARD_SKIPPED",
+                stage="persistence",
+                actor="SYSTEM",
+                details=report,
+            )
+            return
+
+        parent_cases = list(
+            await self.session.scalars(
+                select(ReconciliationCase)
+                .where(ReconciliationCase.reconciliation_run_id == parent.id)
+                .order_by(ReconciliationCase.case_id)
+            )
+        )
+        child_cases = {
+            case.case_id: case
+            for case in await self.session.scalars(
+                select(ReconciliationCase).where(
+                    ReconciliationCase.reconciliation_run_id == run.id
+                )
+            )
+        }
+        assignment_rows = list(
+            await self.session.scalars(
+                select(HumanDecision)
+                .where(
+                    HumanDecision.reconciliation_run_id == parent.id,
+                    HumanDecision.action == "ASSIGN",
+                )
+                .order_by(HumanDecision.created_at, HumanDecision.id)
+            )
+        )
+        assignments = {decision.case_id: decision for decision in assignment_rows}
+        tasks = list(
+            await self.session.scalars(
+                select(FollowUpTask)
+                .where(
+                    FollowUpTask.reconciliation_run_id == parent.id,
+                    FollowUpTask.status == "OPEN",
+                )
+                .order_by(FollowUpTask.created_at, FollowUpTask.id)
+            )
+        )
+        def evidence_payload(case: ReconciliationCase) -> dict[str, Any]:
+            return {
+                "source_entity_ids": case.source_entity_ids,
+                "record_snapshot": case.record_snapshot,
+            }
+
+        reviews = ReviewRepository(self.session)
+        unchanged_cases = {
+            parent_case.case_id
+            for parent_case in parent_cases
+            if (child := child_cases.get(parent_case.case_id)) is not None
+            and _stable_checksum(evidence_payload(parent_case))
+            == _stable_checksum(evidence_payload(child))
+        }
+        for parent_case in parent_cases:
+            source_decision = assignments.get(parent_case.case_id)
+            child = child_cases.get(parent_case.case_id)
+            if source_decision is None or not parent_case.owner_role:
+                continue
+            if child is None or parent_case.case_id not in unchanged_cases:
+                report["skipped"].append(
+                    {"case_id": parent_case.case_id, "reason": "case_evidence_changed"}
+                )
+                continue
+
+            run.review_revision += 1
+            await self.cases.update_case(
+                child,
+                owner_role=parent_case.owner_role,
+                human_reviewed=True,
+            )
+            exception = await self.cases.exception_for_case(run.id, child.case_id)
+            if exception is not None:
+                exception.owner_role = parent_case.owner_role
+            carry_decision = await reviews.create_human_decision(
+                case_id=child.case_id,
+                reconciliation_run_id=run.id,
+                action="CARRY_FORWARD_ASSIGNMENT",
+                actor="SYSTEM",
+                previous_state=child.case_state,
+                new_state=child.case_state,
+                reason="UNCHANGED_EXECUTION_EVIDENCE",
+                note=(
+                    f"Assignment carried from run {parent.id}, decision {source_decision.id}; "
+                    "financial disposition was recalculated."
+                ),
+            )
+            report["carried"].append(
+                {
+                    "case_id": child.case_id,
+                    "owner_role": parent_case.owner_role,
+                    "source_decision_id": str(source_decision.id),
+                    "carry_decision_id": str(carry_decision.id),
+                }
+            )
+
+        for source_task in tasks:
+            if source_task.case_id not in unchanged_cases:
+                report["skipped"].append(
+                    {
+                        "case_id": source_task.case_id,
+                        "source_task_id": str(source_task.id),
+                        "reason": "task_case_evidence_changed",
+                    }
+                )
+                continue
+            copied = await reviews.create_follow_up_task(
+                case_id=source_task.case_id,
+                reconciliation_run_id=run.id,
+                task_type=source_task.task_type,
+                amount_at_risk_paise=source_task.amount_at_risk_paise,
+                currency=source_task.currency,
+                required_evidence=source_task.required_evidence,
+                deadline=source_task.deadline,
+                action_code=source_task.action_code,
+                status="OPEN",
+            )
+            report["carried_tasks"].append(
+                {
+                    "case_id": source_task.case_id,
+                    "source_task_id": str(source_task.id),
+                    "carry_task_id": str(copied.id),
+                }
+            )
+
+        report["status"] = (
+            "applied"
+            if report["carried"] or report["carried_tasks"]
+            else "nothing_eligible"
+        )
+        run.config = {**run.config, "review_carry_forward": report}
+        await self.audit.create(
+            reconciliation_run_id=run.id,
+            event_type="REVIEW_CARRY_FORWARD_COMPLETED",
+            stage="persistence",
+            actor="SYSTEM",
+            details=report,
+        )
+        await self.session.flush()
+
     @staticmethod
     def _state_counts(cases: list[Any]) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -517,7 +996,11 @@ class RunService:
 
     async def _persist_result(self, run: ReconciliationRun, result: ReconciliationResult) -> None:
         run_id = run.id
-        await self.cases.clear_for_run(run_id)
+        existing, _ = await self.cases.list_cases(run_id, limit=1)
+        if existing:
+            raise RunServiceError(
+                "IMMUTABLE_EXECUTION", "Persisted results cannot be replaced.", status_code=409
+            )
         raw_row_ids = await self._persist_source_data(run_id, result.ingestion_results)
 
         edge_keys = {
@@ -561,7 +1044,7 @@ class RunService:
                 source_entity_id=candidate.source_entity_id,
                 target_entity_id=candidate.target_entity_id,
                 relationship_type=candidate.relationship_type,
-                match_score=int(candidate.match_strength_score * 10000),  # Scale to 0-10000
+                match_score=candidate.match_strength_score * 100,  # Scale to 0-10000
                 decision_level=decision,
                 rejection_reason="; ".join(reasons) or None,
                 evidence_fields=candidate.evidence_fields,
@@ -712,7 +1195,6 @@ class RunService:
             "rule_set_version": RULE_VERSION,
         }
         result_checksum = _stable_checksum(deterministic_payload)
-        completed_at = datetime.now(UTC)
         metrics = dict(result.metrics)
         metrics.update(
             {
@@ -726,8 +1208,8 @@ class RunService:
         )
         await self.runs.update(
             run,
-            status="COMPLETED",
-            completed_at=completed_at,
+            status="RECONCILING",
+            completed_at=None,
             duration_ms=int(result.duration_seconds * 1000),
             total_source_rows=result.total_source_records,
             total_cases=len(result.cases),
@@ -735,7 +1217,17 @@ class RunService:
             cash_position=cash,
             evaluation={},
             result_checksum=result_checksum,
-            config={**run.config, "prediction_report": prediction},
+            config={
+                **run.config,
+                "prediction_report": prediction,
+                "baseline_result_payload": deterministic_payload,
+                "baseline_counts": {
+                    "total_source_records": result.total_source_records,
+                    "total_cases": len(result.cases),
+                    "evidence_edges": len(result.evidence_edges),
+                    "exceptions": len(result.exceptions),
+                },
+            },
         )
         for timing in result.stage_timings:
             await self.audit.create(
@@ -850,6 +1342,7 @@ class RunService:
             )
 
     async def _ensure_default_policy(self) -> Any:
+        await self.session.execute(text("SELECT pg_advisory_xact_lock(452819733)"))
         policy = load_policy(self.policy_path)
         existing = await self.runs.get_policy_by_version(policy.policy_id, policy.version)
         if existing is not None:
@@ -869,6 +1362,8 @@ class RunService:
         )
 
     async def _policy_for_run(self, run: ReconciliationRun) -> SettlementPolicy:
+        if run.policy_snapshot:
+            return SettlementPolicy.model_validate(run.policy_snapshot)
         if run.policy_version_id is None:
             raise RunServiceError("POLICY_NOT_FOUND", "The run has no policy version.")
         stored = await self.runs.get_policy(run.policy_version_id)
@@ -878,9 +1373,28 @@ class RunService:
 
     async def _require_run(self, run_id: uuid.UUID) -> ReconciliationRun:
         run = await self.runs.get(run_id)
+        if run is None or (
+            self.owner_subject is not None and run.owner_subject != self.owner_subject
+        ):
+            raise self._not_found(run_id)
+        return run
+
+    async def _locked_run(self, run_id: uuid.UUID) -> ReconciliationRun:
+        await self._require_run(run_id)
+        run = await self.runs.get_for_update(run_id)
         if run is None:
             raise self._not_found(run_id)
         return run
+
+    def _verify_source_hash(self, run_id: uuid.UUID, source_file: SourceFile) -> None:
+        path = self._file_path(run_id, source_file.source_type)
+        if not path.is_file() or _sha256(path.read_bytes()) != source_file.file_checksum:
+            raise RunServiceError(
+                "SOURCE_INTEGRITY_FAILED",
+                "Stored source bytes do not match their registered checksum.",
+                status_code=409,
+                details={"source_type": source_file.source_type},
+            )
 
     def _not_found(self, run_id: uuid.UUID) -> RunServiceError:
         return RunServiceError(

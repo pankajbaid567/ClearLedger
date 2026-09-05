@@ -23,7 +23,7 @@ export default defineConfig({
   webServer: [
     {
       command:
-        "AI_ENABLED=false WEB_ORIGIN=http://localhost:3120 .venv/bin/uvicorn apps.api.app.main:app --host 127.0.0.1 --port 18100",
+        "APP_MODE=local_demo AI_ENABLED=false DATABASE_URL=postgresql+psycopg://clearledger:clearledger@localhost:5432/clearledger WEB_ORIGIN=http://localhost:3120 .venv/bin/uvicorn apps.api.app.main:app --host 127.0.0.1 --port 18100",
       cwd: "../..",
       url: "http://127.0.0.1:18100/health",
       reuseExistingServer: false,

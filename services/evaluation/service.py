@@ -9,18 +9,24 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import ReconciliationRun
-from db.repositories import AuditRepository
+from db.repositories import AuditRepository, RunRepository
 from evaluator.metrics import compute_all_metrics, compute_scenario_breakdown
 from evaluator.schemas import PredictionReport
+from evaluator.validation import validate_evaluation_inputs
 from generator.ground_truth import GroundTruthManifest
 from services.reconciliation.run_service import RunServiceError
 
 
 async def evaluate_persisted_run(
-    session: AsyncSession, run_id: uuid.UUID, ground_truth_path: str | Path
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    ground_truth_path: str | Path,
+    *,
+    actor: str = "SYSTEM",
 ) -> dict[str, Any]:
-    run = await session.get(ReconciliationRun, run_id)
+    # Serialize with human review so current projection metrics and the baseline
+    # evaluation version are committed from one refreshed run revision.
+    run = await RunRepository(session).get_for_update(run_id)
     if run is None:
         raise RunServiceError(
             "RUN_NOT_FOUND",
@@ -46,16 +52,19 @@ async def evaluate_persisted_run(
 
     prediction = PredictionReport.model_validate_json(json.dumps(prediction_data))
     truth = GroundTruthManifest.model_validate_json(truth_path.read_text())
-    if prediction.dataset_id != truth.dataset_id:
+    try:
+        validate_evaluation_inputs(prediction, truth)
+    except ValueError as exc:
         raise RunServiceError(
             "DATASET_MISMATCH",
-            "The persisted prediction and evaluator ground truth have different dataset IDs.",
+            "The persisted prediction is incompatible with the evaluator ground truth.",
             status_code=409,
             details={
                 "prediction_dataset_id": prediction.dataset_id,
                 "truth_dataset_id": truth.dataset_id,
+                "reason": str(exc),
             },
-        )
+        ) from exc
     aggregate = compute_all_metrics(
         prediction.cases,
         truth.cases,
@@ -65,6 +74,11 @@ async def evaluate_persisted_run(
     evaluation = {
         "run_id": str(run_id),
         "dataset_id": truth.dataset_id,
+        "execution_revision": run.execution_revision,
+        "evaluated_review_revision": run.review_revision,
+        "current_review_revision": run.review_revision,
+        "evaluation_scope": "IMMUTABLE_ENGINE_BASELINE",
+        "baseline_result_checksum": run.result_checksum,
         "aggregate": aggregate,
         "scenario_breakdown": compute_scenario_breakdown(prediction.cases, truth.cases),
     }
@@ -80,8 +94,15 @@ async def evaluate_persisted_run(
         event_type="EVALUATION_COMPLETED",
         stage="evaluation",
         severity="INFO",
-        actor="SYSTEM",
-        details={"aggregate": aggregate, "dataset_id": truth.dataset_id},
+        actor=actor,
+        details={
+            "aggregate": aggregate,
+            "dataset_id": truth.dataset_id,
+            "execution_revision": run.execution_revision,
+            "evaluated_review_revision": run.review_revision,
+            "evaluation_scope": "IMMUTABLE_ENGINE_BASELINE",
+            "baseline_result_checksum": run.result_checksum,
+        },
     )
     await session.flush()
     return evaluation

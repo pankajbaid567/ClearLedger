@@ -12,24 +12,60 @@ from packages.domain.enums import CaseState
 # ── Edge-level helpers ──────────────────────────────────────────────────────
 
 
-def _edge_key(e: PredictedEdge | GroundTruthEdge) -> tuple[str, str, str]:
-    return (e.source_entity_id, e.target_entity_id, e.relationship_type)
+EdgeKey = tuple[str, str, str, str, int]
+TopologyKey = tuple[str, str, str, str]
+MetricValue = int | float | str | None
+Metrics = dict[str, MetricValue]
 
 
-def _truth_edge_set(cases: list[GroundTruthCase]) -> set[tuple[str, str, str]]:
-    s: set[tuple[str, str, str]] = set()
+def _edge_key(case_id: str, edge: PredictedEdge | GroundTruthEdge) -> EdgeKey:
+    """An evaluated relationship includes its case and exact allocated amount."""
+    return (
+        case_id,
+        edge.source_entity_id,
+        edge.target_entity_id,
+        edge.relationship_type,
+        edge.allocated_amount_paise,
+    )
+
+
+def _topology_key(case_id: str, edge: PredictedEdge | GroundTruthEdge) -> TopologyKey:
+    return (
+        case_id,
+        edge.source_entity_id,
+        edge.target_entity_id,
+        edge.relationship_type,
+    )
+
+
+def _truth_edge_set(cases: list[GroundTruthCase]) -> set[EdgeKey]:
+    s: set[EdgeKey] = set()
     for c in cases:
         for e in c.expected_relationships:
-            s.add(_edge_key(e))
+            s.add(_edge_key(c.case_id, e))
     return s
 
 
-def _pred_edge_set(cases: list[PredictedCase]) -> set[tuple[str, str, str]]:
-    s: set[tuple[str, str, str]] = set()
+def _pred_edge_set(cases: list[PredictedCase]) -> set[EdgeKey]:
+    s: set[EdgeKey] = set()
     for c in cases:
         for e in c.predicted_relationships:
-            s.add(_edge_key(e))
+            s.add(_edge_key(c.case_id, e))
     return s
+
+
+def _topology_counts(
+    predicted: list[PredictedCase], truth: list[GroundTruthCase]
+) -> tuple[int, int, int]:
+    predicted_edges = {
+        _topology_key(case.case_id, edge)
+        for case in predicted
+        for edge in case.predicted_relationships
+    }
+    truth_edges = {
+        _topology_key(case.case_id, edge) for case in truth for edge in case.expected_relationships
+    }
+    return len(predicted_edges & truth_edges), len(predicted_edges), len(truth_edges)
 
 
 def _relationship_counts(
@@ -43,23 +79,19 @@ def _relationship_counts(
 # ── Relationship metrics ───────────────────────────────────────────────────
 
 
-def relationship_precision(
-    predicted: list[PredictedCase], truth: list[GroundTruthCase]
-) -> float:
+def relationship_precision(predicted: list[PredictedCase], truth: list[GroundTruthCase]) -> float:
     """Of the edges the engine declared, how many are correct?"""
-    true_positives, predicted_count, _ = _relationship_counts(predicted, truth)
+    true_positives, predicted_count, expected_count = _relationship_counts(predicted, truth)
     if not predicted_count:
-        return 1.0  # no predictions → vacuously precise
+        return 1.0 if not expected_count else 0.0
     return true_positives / predicted_count
 
 
-def relationship_recall(
-    predicted: list[PredictedCase], truth: list[GroundTruthCase]
-) -> float:
+def relationship_recall(predicted: list[PredictedCase], truth: list[GroundTruthCase]) -> float:
     """Of the true edges, how many did the engine find?"""
-    true_positives, _, expected_count = _relationship_counts(predicted, truth)
+    true_positives, predicted_count, expected_count = _relationship_counts(predicted, truth)
     if not expected_count:
-        return 1.0
+        return 1.0 if not predicted_count else 0.0
     return true_positives / expected_count
 
 
@@ -73,31 +105,47 @@ def relationship_f1(precision: float, recall: float) -> float:
 
 
 def _case_truth_map(truth: list[GroundTruthCase]) -> dict[str, GroundTruthCase]:
-    return {c.case_id: c for c in truth}
+    result = {c.case_id: c for c in truth}
+    if len(result) != len(truth):
+        raise ValueError("ground truth contains duplicate case IDs")
+    return result
 
 
 def _case_pred_map(predicted: list[PredictedCase]) -> dict[str, PredictedCase]:
-    return {c.case_id: c for c in predicted}
+    result = {c.case_id: c for c in predicted}
+    if len(result) != len(predicted):
+        raise ValueError("predictions contain duplicate case IDs")
+    return result
 
 
-def case_state_accuracy(
-    predicted: list[PredictedCase], truth: list[GroundTruthCase]
-) -> float:
+def _case_is_exactly_reconciled(predicted: PredictedCase, truth: GroundTruthCase) -> bool:
+    return (
+        predicted.predicted_case_state == CaseState.RECONCILED
+        and truth.expected_case_state == CaseState.RECONCILED
+        and predicted.predicted_gross_amount_paise == truth.expected_gross_amount_paise
+        and predicted.predicted_net_amount_paise == truth.expected_net_amount_paise
+        and predicted.predicted_residual_paise == truth.expected_residual_paise == 0
+        and predicted.predicted_cash_bucket == truth.expected_cash_bucket
+        and {_edge_key(predicted.case_id, edge) for edge in predicted.predicted_relationships}
+        == {_edge_key(truth.case_id, edge) for edge in truth.expected_relationships}
+    )
+
+
+def case_state_accuracy(predicted: list[PredictedCase], truth: list[GroundTruthCase]) -> float:
     """Fraction of cases where the predicted state matches ground truth."""
     truth_map = _case_truth_map(truth)
     if not truth_map:
         return 1.0
-    correct = 0
-    for pc in predicted:
-        tc = truth_map.get(pc.case_id)
-        if tc and pc.predicted_case_state == tc.expected_case_state:
-            correct += 1
+    pred_map = _case_pred_map(predicted)
+    correct = sum(
+        pred_map.get(case_id) is not None
+        and pred_map[case_id].predicted_case_state == truth_case.expected_case_state
+        for case_id, truth_case in truth_map.items()
+    )
     return correct / len(truth_map)
 
 
-def exception_code_accuracy(
-    predicted: list[PredictedCase], truth: list[GroundTruthCase]
-) -> float:
+def exception_code_accuracy(predicted: list[PredictedCase], truth: list[GroundTruthCase]) -> float:
     """Accuracy for cases that have an expected exception code."""
     exception_cases = [c for c in truth if c.expected_exception_code is not None]
     if not exception_cases:
@@ -110,17 +158,16 @@ def exception_code_accuracy(
     return correct / len(exception_cases)
 
 
-def cash_bucket_accuracy(
-    predicted: list[PredictedCase], truth: list[GroundTruthCase]
-) -> float:
+def cash_bucket_accuracy(predicted: list[PredictedCase], truth: list[GroundTruthCase]) -> float:
     truth_map = _case_truth_map(truth)
     if not truth_map:
         return 1.0
-    correct = 0
-    for pc in predicted:
-        tc = truth_map.get(pc.case_id)
-        if tc and pc.predicted_cash_bucket == tc.expected_cash_bucket:
-            correct += 1
+    pred_map = _case_pred_map(predicted)
+    correct = sum(
+        pred_map.get(case_id) is not None
+        and pred_map[case_id].predicted_cash_bucket == truth_case.expected_cash_bucket
+        for case_id, truth_case in truth_map.items()
+    )
     return correct / len(truth_map)
 
 
@@ -131,9 +178,7 @@ def stp_rate(predicted: list[PredictedCase]) -> float:
     """Straight-through processing: fraction of cases auto-reconciled."""
     if not predicted:
         return 0.0
-    reconciled = sum(
-        1 for c in predicted if c.predicted_case_state == CaseState.RECONCILED
-    )
+    reconciled = sum(1 for c in predicted if c.predicted_case_state == CaseState.RECONCILED)
     return reconciled / len(predicted)
 
 
@@ -148,11 +193,7 @@ def monetary_reconciliation_rate(
     truth_map = _case_truth_map(truth)
     for pc in predicted:
         tc = truth_map.get(pc.case_id)
-        if (
-            tc
-            and pc.predicted_case_state == CaseState.RECONCILED
-            and tc.expected_case_state == CaseState.RECONCILED
-        ):
+        if tc and _case_is_exactly_reconciled(pc, tc):
             reconciled_gross += tc.expected_gross_amount_paise
     return reconciled_gross / total_gross
 
@@ -160,18 +201,14 @@ def monetary_reconciliation_rate(
 # ── Safety metrics ─────────────────────────────────────────────────────────
 
 
-def false_positive_count(
-    predicted: list[PredictedCase], truth: list[GroundTruthCase]
-) -> int:
+def false_positive_count(predicted: list[PredictedCase], truth: list[GroundTruthCase]) -> int:
     """Cases predicted RECONCILED but ground truth is NOT RECONCILED."""
     truth_map = _case_truth_map(truth)
     count = 0
     for pc in predicted:
         tc = truth_map.get(pc.case_id)
-        if (
-            pc.predicted_case_state == CaseState.RECONCILED
-            and tc
-            and tc.expected_case_state != CaseState.RECONCILED
+        if pc.predicted_case_state == CaseState.RECONCILED and (
+            tc is None or not _case_is_exactly_reconciled(pc, tc)
         ):
             count += 1
     return count
@@ -185,18 +222,18 @@ def false_positive_amount_paise(
     total = 0
     for pc in predicted:
         tc = truth_map.get(pc.case_id)
-        if (
-            pc.predicted_case_state == CaseState.RECONCILED
-            and tc
-            and tc.expected_case_state != CaseState.RECONCILED
+        if pc.predicted_case_state == CaseState.RECONCILED and (
+            tc is None or not _case_is_exactly_reconciled(pc, tc)
         ):
-            total += tc.expected_gross_amount_paise
+            total += (
+                tc.expected_gross_amount_paise
+                if tc is not None
+                else abs(pc.predicted_gross_amount_paise)
+            )
     return total
 
 
-def hidden_row_count(
-    predicted: list[PredictedCase], truth: list[GroundTruthCase]
-) -> int:
+def hidden_row_count(predicted: list[PredictedCase], truth: list[GroundTruthCase]) -> int:
     """Cases in ground truth that have no corresponding prediction."""
     pred_ids = {c.case_id for c in predicted}
     return sum(1 for c in truth if c.case_id not in pred_ids)
@@ -234,8 +271,13 @@ def compute_all_metrics(
     truth: list[GroundTruthCase],
     duration_seconds: float = 0.0,
     total_records: int = 0,
-) -> dict:
-    true_positives, predicted_count, expected_count = _relationship_counts(
+) -> Metrics:
+    # Reject duplicate case IDs before any dictionary or set operation can hide
+    # them and make an invalid report appear more accurate.
+    _case_pred_map(predicted)
+    _case_truth_map(truth)
+    true_positives, predicted_count, expected_count = _relationship_counts(predicted, truth)
+    topology_true_positives, topology_predicted_count, topology_expected_count = _topology_counts(
         predicted, truth
     )
     prec = relationship_precision(predicted, truth)
@@ -250,8 +292,7 @@ def compute_all_metrics(
         truth_case.expected_gross_amount_paise
         for case in predicted
         if (truth_case := truth_map.get(case.case_id)) is not None
-        and case.predicted_case_state == CaseState.RECONCILED
-        and truth_case.expected_case_state == CaseState.RECONCILED
+        and _case_is_exactly_reconciled(case, truth_case)
     )
 
     return {
@@ -261,19 +302,21 @@ def compute_all_metrics(
         "relationship_true_positive_count": true_positives,
         "relationship_predicted_count": predicted_count,
         "relationship_expected_count": expected_count,
+        "relationship_topology_true_positive_count": topology_true_positives,
+        "relationship_topology_predicted_count": topology_predicted_count,
+        "relationship_topology_expected_count": topology_expected_count,
         "case_state_accuracy": round(case_state_accuracy(predicted, truth), 4),
         "exception_code_accuracy": round(exception_code_accuracy(predicted, truth), 4),
         "cash_bucket_accuracy": round(cash_bucket_accuracy(predicted, truth), 4),
         "stp_rate": round(stp_rate(predicted), 4),
         "stp_reconciled_case_count": reconciled_case_count,
-        "monetary_reconciliation_rate": round(
-            monetary_reconciliation_rate(predicted, truth), 4
-        ),
+        "monetary_reconciliation_rate": round(monetary_reconciliation_rate(predicted, truth), 4),
         "reconciled_gross_amount_paise": reconciled_gross_paise,
         "total_gross_amount_paise": total_gross_paise,
         "false_positive_count": false_positive_count(predicted, truth),
         "false_positive_amount_paise": false_positive_amount_paise(predicted, truth),
         "hidden_row_count": hidden_row_count(predicted, truth),
+        "missing_case_count": hidden_row_count(predicted, truth),
         "unexplained_residual_paise": unexplained_residual_paise(predicted),
         "open_exception_residual_paise": open_exception_residual_paise(predicted),
         "throughput_records_per_second": round(
@@ -289,7 +332,7 @@ def compute_all_metrics(
 def compute_scenario_breakdown(
     predicted: list[PredictedCase],
     truth: list[GroundTruthCase],
-) -> dict[str, dict]:
+) -> dict[str, Metrics]:
     """Break down metrics by scenario_label."""
     # Group truth by scenario
     scenario_truths: dict[str, list[GroundTruthCase]] = {}
@@ -299,7 +342,7 @@ def compute_scenario_breakdown(
     # Group predictions by case_id for lookup
     pred_map = _case_pred_map(predicted)
 
-    result: dict[str, dict] = {}
+    result: dict[str, Metrics] = {}
     for label, truths in sorted(scenario_truths.items()):
         case_ids = {tc.case_id for tc in truths}
         matching_preds = [pred_map[cid] for cid in case_ids if cid in pred_map]

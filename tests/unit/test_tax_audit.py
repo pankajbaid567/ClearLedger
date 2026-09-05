@@ -31,9 +31,14 @@ def test_tax_audit_reconciles_mdr_fee_and_gst() -> None:
     assert audit.total_gateway_fee_paise > 0
     assert audit.total_tax_paise > 0
 
-    # Total tax must equal claimable ITC plus disputed tax
-    assert audit.total_tax_paise == audit.claimable_itc_paise + audit.disputed_tax_paise
-    assert audit.itc_status == "DISCREPANCY_FLAGGED"
+    # This input can verify recorded fee/tax arithmetic, but cannot prove ITC.
+    assert audit.total_tax_paise == audit.supported_tax_paise + audit.disputed_tax_paise
+    assert audit.claimable_itc_paise is None
+    assert audit.external_tax_statement_available is False
+    assert audit.evidence_status == "POLICY_ARITHMETIC_ONLY"
+    assert audit.itc_status == "UNAVAILABLE"
+    assert audit.policy_id == policy.policy_id
+    assert audit.policy_version == policy.version
 
 
 def test_tax_audit_identifies_all_fee_tax_variances() -> None:
@@ -63,6 +68,74 @@ def test_tax_audit_handles_empty_cases() -> None:
     assert audit.gross_payment_volume_paise == 0
     assert audit.total_gateway_fee_paise == 0
     assert audit.total_tax_paise == 0
-    assert audit.claimable_itc_paise == 0
-    assert audit.tax_policy_pass_rate == 1.0
-    assert audit.itc_status == "AUDIT_READY"
+    assert audit.claimable_itc_paise is None
+    assert audit.tax_policy_pass_rate is None
+    assert audit.fee_policy_pass_rate is None
+    assert audit.consistency_status == "NOT_EVALUATED"
+    assert audit.itc_status == "UNAVAILABLE"
+
+
+def test_tax_audit_flags_components_without_a_source_payment() -> None:
+    audit = calculate_tax_audit(
+        [
+            {
+                "case_id": "CASE_ORPHAN_COMPONENT",
+                "exception_code": "MISSING_PAYMENT",
+                "record_snapshot": [
+                    {
+                        "source_type": "payments",
+                        "payment_id": "pay_present",
+                        "amount_paise": 10_000,
+                    },
+                    {
+                        "source_type": "settlement_components",
+                        "settlement_id": "set_1",
+                        "source_event_id": "pay_present",
+                        "component_type": "GATEWAY_FEE",
+                        "amount_paise": 200,
+                    },
+                    {
+                        "source_type": "settlement_components",
+                        "settlement_id": "set_1",
+                        "source_event_id": "pay_present",
+                        "component_type": "TAX_ON_FEE",
+                        "amount_paise": 36,
+                    },
+                    {
+                        "source_type": "settlement_components",
+                        "settlement_id": "set_1",
+                        "source_event_id": "pay_missing",
+                        "component_type": "GATEWAY_FEE",
+                        "amount_paise": 50,
+                    },
+                    {
+                        "source_type": "settlement_components",
+                        "settlement_id": "set_1",
+                        "source_event_id": "pay_missing",
+                        "component_type": "TAX_ON_FEE",
+                        "amount_paise": 9,
+                    },
+                ],
+            }
+        ]
+    )
+
+    assert audit.unmatched_component_count == 2
+    assert audit.fee_policy_pass_rate == 0.5
+    assert audit.tax_policy_pass_rate == 0.5
+    assert audit.consistency_status == "DISCREPANCY_FLAGGED"
+    assert audit.discrepant_case_count == 1
+    assert audit.fee_variance_paise == 50
+    assert audit.tax_variance_paise == 9
+    assert audit.disputed_tax_paise == 9
+
+    orphan = next(
+        item for item in audit.discrepancies if item.discrepancy_code == "SOURCE_EVENT_NOT_FOUND"
+    )
+    assert orphan.payment_id == "pay_missing"
+    assert orphan.settlement_id == "set_1"
+    assert orphan.gross_amount_paise == 0
+    assert orphan.expected_fee_paise == 0
+    assert orphan.actual_fee_paise == 50
+    assert orphan.expected_tax_paise == 0
+    assert orphan.actual_tax_paise == 9

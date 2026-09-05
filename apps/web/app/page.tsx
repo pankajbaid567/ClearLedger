@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   CheckCircle2,
@@ -15,13 +15,15 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { AmountDisplay } from "@/components/AmountDisplay";
 import { BrandMark } from "@/components/BrandMark";
-import { ProgressStepper } from "@/components/ProgressStepper";
+import { ExportButton } from "@/components/ExportButton";
+import { useIdentity } from "@/components/AccessBoundary";
 import {
   APIError,
+  exportUrl,
   createRun,
   evaluateRun,
   getRun,
@@ -42,17 +44,6 @@ const sourceTypes = [
   { key: "settlement_components", label: "Settlement components" },
   { key: "bank_transactions", label: "Bank transactions" },
 ] as const;
-
-const stages = [
-  "Ingestion",
-  "Validation",
-  "Normalization",
-  "Matching",
-  "Verification",
-  "AI Analysis",
-  "Cash Position",
-  "Complete",
-];
 
 type SourceKey = (typeof sourceTypes)[number]["key"];
 
@@ -79,21 +70,15 @@ async function waitForPersistedCompletion(runId: string) {
 
 export default function RunSetupPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const identity = useIdentity();
+  const canCreate = identity?.permissions.includes("create") ?? false;
   const [run, setRun] = useState<Run | null>(null);
   const [validation, setValidation] = useState<Validation | null>(null);
   const [files, setFiles] = useState<Partial<Record<SourceKey, File>>>({});
-  const [activeStage, setActiveStage] = useState(-1);
+  const [isDemoRun, setIsDemoRun] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [lastRunId, setLastRunId] = useState<string | null>(null);
-  const timers = useRef<number[]>([]);
-
-  useEffect(
-    () => () => {
-      timers.current.forEach((timer) => window.clearInterval(timer));
-    },
-    [],
-  );
-
   useEffect(() => {
     setLastRunId(window.localStorage.getItem("clearledger:lastRunId"));
   }, []);
@@ -102,6 +87,7 @@ export default function RunSetupPage() {
     mutationFn: loadDemoRun,
     onSuccess: ({ run: loadedRun, validation: loadedValidation }) => {
       setRun(loadedRun);
+      setIsDemoRun(true);
       setValidation(loadedValidation);
       setMessage("Demo dataset loaded and validated.");
       window.localStorage.setItem("clearledger:lastRunId", loadedRun.id);
@@ -118,6 +104,7 @@ export default function RunSetupPage() {
     },
     onSuccess: ({ run: loadedRun, validation: loadedValidation }) => {
       setRun(loadedRun);
+      setIsDemoRun(false);
       setValidation(loadedValidation);
       setMessage(
         loadedValidation.valid
@@ -132,35 +119,44 @@ export default function RunSetupPage() {
   const reconcileMutation = useMutation({
     mutationFn: async () => {
       if (!run) throw new Error("No validated run is selected.");
-      setActiveStage(0);
-      const stageTimer = window.setInterval(
-        () => setActiveStage((current) => Math.min(6, current + 1)),
-        520,
-      );
-      timers.current.push(stageTimer);
-      try {
-        await reconcileRun(run.id);
-        setActiveStage(6);
-        await waitForPersistedCompletion(run.id);
-        await evaluateRun(run.id);
-        setActiveStage(7);
-        await new Promise((resolve) => window.setTimeout(resolve, 350));
-        return run.id;
-      } finally {
-        window.clearInterval(stageTimer);
+      try { await reconcileRun(run.id); }
+      catch (error) {
+        // A dropped response is not proof the saved run failed.
+        const persisted = await getRunStatus(run.id).catch(() => null);
+        if (persisted?.status !== "COMPLETED") throw error;
       }
+      await waitForPersistedCompletion(run.id);
+      return run.id;
     },
-    onSuccess: (runId) => router.push(`/runs/${runId}`),
-    onError: () => setActiveStage(-1),
+    onSuccess: (runId) => {
+      if (isDemoRun) {
+        void evaluateRun(runId).then(() => Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["metrics", runId] }),
+          queryClient.invalidateQueries({ queryKey: ["evaluation", runId] }),
+        ])).catch(() => { /* Reconciliation is usable even when optional evaluation is unavailable. */ });
+      }
+      router.push(`/runs/${runId}`);
+    },
   });
+  const progressQuery = useQuery({
+    queryKey: ["run-progress", run?.id],
+    queryFn: () => getRunStatus(run!.id),
+    enabled: Boolean(run && reconcileMutation.isPending),
+    refetchInterval: reconcileMutation.isPending ? 700 : false,
+  });
+  const busy = demoMutation.isPending || uploadMutation.isPending || reconcileMutation.isPending;
+  const sourcesPresent = validation?.required_sources_present ?? (validation ? validation.missing_source_types.length === 0 : false);
 
   const validationByType = useMemo(
     () => new Map(validation?.files.map((item) => [item.source_type, item]) ?? []),
     [validation],
   );
   const allFilesSelected = sourceTypes.every(({ key }) => files[key]);
-  const ready = Boolean(run && validation?.valid);
-  const readinessPercent = ready ? 100 : Math.round((Object.keys(files).length / sourceTypes.length) * 70);
+  const ready = Boolean(run && (validation?.processing_permitted ?? validation?.valid));
+  const presentSourceCount = validation
+    ? sourceTypes.length - validation.missing_source_types.length
+    : Object.keys(files).length;
+  const readinessPercent = Math.round((presentSourceCount / sourceTypes.length) * 100);
   const error = demoMutation.error ?? uploadMutation.error ?? reconcileMutation.error;
 
   return (
@@ -208,12 +204,12 @@ export default function RunSetupPage() {
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <span className="hidden rounded-full bg-[#f1f5f9] px-2.5 py-1 text-[0.62rem] font-bold text-[#475569] sm:inline-flex">
-                  75 cases · 693 rows
+                  Synthetic demo · Five sources
                 </span>
                 <button
                   className="btn btn-primary"
                   data-testid="load-demo"
-                  disabled={demoMutation.isPending || reconcileMutation.isPending}
+                  disabled={busy || !canCreate}
                   onClick={() => demoMutation.mutate()}
                   type="button"
                 >
@@ -239,7 +235,7 @@ export default function RunSetupPage() {
                     <div className="flex min-w-0 items-center gap-3">
                       <span
                         className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[6px] ${
-                          result ? "bg-[#ecfdf5] text-[#059669]" : "bg-[#f1f5f9] text-[#64748b]"
+                          result && result.rejected_count === 0 ? "bg-[#ecfdf5] text-[#059669]" : "bg-[#f1f5f9] text-[#64748b]"
                         }`}
                       >
                         {result ? (
@@ -279,6 +275,8 @@ export default function RunSetupPage() {
                       <span>{selectedFile ? "Replace" : "Choose"}</span>
                       <input
                         accept=".csv,text/csv"
+                        disabled={busy || !canCreate}
+                        aria-label={`Choose ${label} CSV`}
                         className="sr-only"
                         onChange={(event) => {
                           const file = event.target.files?.[0];
@@ -303,7 +301,7 @@ export default function RunSetupPage() {
               </span>
               <button
                 className="btn btn-secondary"
-                disabled={!allFilesSelected || uploadMutation.isPending || reconcileMutation.isPending}
+                disabled={!allFilesSelected || busy || !canCreate}
                 onClick={() => uploadMutation.mutate()}
                 type="button"
               >
@@ -317,20 +315,21 @@ export default function RunSetupPage() {
             </div>
           </section>
 
-          {reconcileMutation.isPending || activeStage >= 0 ? (
-            <section className="panel p-5" data-testid="reconciliation-progress">
-              <div className="mb-5 flex items-center justify-between gap-4">
-                <div>
-                  <h2 className="panel-title">Reconciliation progress</h2>
-                  <p className="panel-copy">Run {run ? shortId(run.id, 18) : ""}</p>
-                </div>
-                <span className="text-[0.72rem] font-bold text-[#64748b]">
-                  {activeStage >= stages.length - 1 ? "Complete" : "Processing"}
-                </span>
-              </div>
-              <ProgressStepper activeIndex={activeStage} stages={stages} />
+          {reconcileMutation.isPending ? (
+            <section className="panel p-5" data-testid="reconciliation-progress" role="status" aria-live="polite">
+              <h2 className="panel-title">Reconciliation progress</h2>
+              <p className="panel-copy">{progressQuery.data?.stage ? titleCase(progressQuery.data.stage) : "Waiting for persisted run status"} · {progressQuery.data?.processed_records ?? 0} records processed</p>
+              <progress className="mt-3 w-full" max={100} value={progressQuery.data?.progress_percent ?? 0} aria-label="Persisted reconciliation progress" />
+              {progressQuery.error ? <p className="text-xs text-amber-800">Progress updates are unavailable. The reconciliation request is still in progress.</p> : null}
             </section>
           ) : null}
+          {validation ? <section className="panel space-y-3 p-5" aria-labelledby="validation-details">
+            <h2 className="panel-title" id="validation-details">Source validation</h2>
+            <p className="text-sm">{sourcesPresent ? "All required source files are present." : `Missing sources: ${validation.missing_source_types.map(titleCase).join(", ")}`} {validation.invalid_rows ? `${validation.invalid_rows} rows require correction; they remain visible in the exception record.` : "All source rows passed validation."}</p>
+            {validation.files.map((file) => <details className="rounded border border-slate-200 p-3" key={file.source_type}><summary className="cursor-pointer text-sm font-semibold">{titleCase(file.source_type)} · {file.accepted_count} accepted / {file.rejected_count} rejected · {titleCase(file.quality)}</summary>{file.errors.length ? <ul className="mt-3 space-y-2 text-xs">{file.errors.map((issue, index) => <li key={index} className="break-words rounded bg-amber-50 p-2">{Object.entries(issue).map(([key, value]) => `${titleCase(key)}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`).join(" · ")}</li>)}</ul> : <p className="text-xs">No rejected rows.</p>}</details>)}
+            {run && validation.invalid_rows > 0 ? <ExportButton href={exportUrl(run.id, "rejected-rows.csv")} label="Download rejected rows CSV" /> : null}
+          </section> : null}
+
         </div>
 
         <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
@@ -340,24 +339,30 @@ export default function RunSetupPage() {
                 <div>
                   <p className="eyebrow">Run readiness</p>
                   <h2 className="m-0 text-[1rem] font-bold text-[#0f172a]">
-                    {ready ? "Ready to reconcile" : "Waiting for validated data"}
+                    {ready
+                      ? "Ready to reconcile"
+                      : sourcesPresent
+                        ? "Sources present · validation blocked"
+                        : "Waiting for required sources"}
                   </h2>
                 </div>
                 <span
                   className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
-                    ready ? "bg-[#ecfdf5] text-[#059669]" : "bg-[#f1f5f9] text-[#64748b]"
+                    sourcesPresent
+                      ? "bg-[#ecfdf5] text-[#059669]"
+                      : "bg-[#f1f5f9] text-[#64748b]"
                   }`}
                 >
                   <CheckCircle2 aria-hidden="true" size={17} />
                 </span>
               </div>
               <div className="mt-5 flex items-center justify-between text-[0.64rem] font-bold text-[#64748b]">
-                <span>Source readiness</span>
+                <span>Required source readiness</span>
                 <span className="tabular-nums">{readinessPercent}%</span>
               </div>
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#e2e8f0]">
                 <div
-                  className={`h-full rounded-full transition-[width] duration-300 ${ready ? "bg-[#059669]" : "bg-[#0c44ac]"}`}
+                  className={`h-full rounded-full transition-[width] duration-300 ${sourcesPresent ? "bg-[#059669]" : "bg-[#0c44ac]"}`}
                   style={{ width: `${readinessPercent}%` }}
                 />
               </div>
@@ -371,13 +376,13 @@ export default function RunSetupPage() {
                 </strong>
               </div>
               <div className="px-4 py-4">
-                <span className="block text-[0.62rem] font-bold text-[#64748b]">Partial</span>
+                <span className="block text-[0.62rem] font-bold text-[#64748b]">Partial files</span>
                 <strong className="mt-1 block text-lg text-[#d97706] tabular-nums">
                   {validation?.files.filter((item) => item.quality === "PARTIAL").length ?? 0}
                 </strong>
               </div>
               <div className="px-4 py-4">
-                <span className="block text-[0.62rem] font-bold text-[#64748b]">Invalid</span>
+                <span className="block text-[0.62rem] font-bold text-[#64748b]">Rejected rows</span>
                 <strong className="mt-1 block text-lg text-[#64748b] tabular-nums">
                   {validation?.invalid_rows ?? 0}
                 </strong>
@@ -385,6 +390,7 @@ export default function RunSetupPage() {
             </div>
 
             <dl className="space-y-3 p-5 text-[0.69rem]">
+              {run?.dataset_checksum ? <div><dt className="text-slate-500">Dataset checksum</dt><dd className="m-0 break-all font-mono text-xs">{run.dataset_checksum}</dd></div> : null}
               <div className="flex justify-between gap-3">
                 <dt className="text-[#64748b]">Run ID</dt>
                 <dd className="m-0 font-mono font-semibold" title={run?.id}>
@@ -409,7 +415,13 @@ export default function RunSetupPage() {
                 <dt className="text-[#64748b]">Status</dt>
                 <dd className="m-0 flex items-center gap-1.5 font-semibold">
                   {ready ? <span className="status-dot bg-[#059669]" /> : null}
-                  {run ? titleCase(run.status) : "Waiting for data"}
+                  {run ? titleCase(progressQuery.data?.status ?? run.status) : "Waiting for data"}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-[#64748b]">Processing permission</dt>
+                <dd className="m-0 font-semibold">
+                  {ready ? "Permitted" : validation ? "Blocked by validation" : "Not evaluated"}
                 </dd>
               </div>
             </dl>
@@ -426,14 +438,15 @@ export default function RunSetupPage() {
               className="rounded-[5px] border border-[#fecdd3] bg-[#fff1f2] px-4 py-3 text-[0.74rem] leading-5 text-[#e11d48]"
               role="alert"
             >
-              {error instanceof APIError ? error.message : "The operation could not be completed."}
+              {error instanceof APIError ? `${error.message}${error.requestId ? ` · Request ${error.requestId}` : ""}${error.retryable ? " Retry when the connection is available." : ""}` : "The operation could not be completed."}
             </p>
           ) : null}
 
+          {!canCreate ? <p className="text-sm text-slate-600">Your role can view runs. Creating or uploading a run requires the create permission.</p> : null}
           <button
             className="btn btn-primary min-h-[48px] w-full text-[0.8rem]"
             data-testid="start-reconciliation"
-            disabled={!ready || reconcileMutation.isPending}
+            disabled={!ready || busy || !canCreate}
             onClick={() => reconcileMutation.mutate()}
             type="button"
           >

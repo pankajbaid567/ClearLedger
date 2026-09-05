@@ -18,7 +18,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   getAIAnalysis,
@@ -38,6 +38,9 @@ import { EvidenceGraph } from "./EvidenceGraph";
 import { ExceptionCard } from "./ExceptionCard";
 import { ReviewActionDialog } from "./ReviewActionDialog";
 import { StatusBadge } from "./StatusBadge";
+import { ErrorState } from "./ErrorState";
+import { useIdentity } from "./AccessBoundary";
+import { useDialogFocus } from "@/lib/useDialogFocus";
 
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -59,7 +62,7 @@ function SourceRecord({ record }: { record: Record<string, unknown> }) {
   const raw = objectValue(record.raw_values);
   const normalized = objectValue(record.normalized_fields);
   const sourceType = stringValue(record.source_type, "source");
-  const importantRaw = Object.entries(raw).slice(0, 8);
+  const importantRaw = Object.entries(raw);
 
   return (
     <article className="min-w-0 overflow-hidden rounded-[8px] border border-[#dbe3df] bg-white shadow-[0_1px_2px_rgba(23,38,32,0.04)]">
@@ -92,7 +95,7 @@ function SourceRecord({ record }: { record: Record<string, unknown> }) {
               Normalized fields ({Object.keys(normalized).length})
             </summary>
             <div className="mt-2 space-y-2">
-              {Object.entries(normalized).slice(0, 8).map(([key, value]) => {
+              {Object.entries(normalized).map(([key, value]) => {
                 const field = objectValue(value);
                 return (
                     <div className="rounded-[5px] border border-[#e5eae7] bg-[#f7f9f8] px-2.5 py-2" key={key}>
@@ -130,32 +133,35 @@ export function EvidenceDrawer({
   onClose: () => void;
 }) {
   const [reviewOpen, setReviewOpen] = useState(false);
+  const identity = useIdentity();
+  const drawerRef = useRef<HTMLElement>(null);
+  useDialogFocus(drawerRef, Boolean(caseId), onClose);
   const [reviewAction, setReviewAction] = useState<ReviewAction>("approve");
   const [notice, setNotice] = useState<string | null>(null);
   const enabled = Boolean(caseId);
   const caseQuery = useQuery({
-    queryKey: ["case", caseId],
-    queryFn: () => getCase(caseId as string),
+    queryKey: ["case", runId, caseId],
+    queryFn: () => getCase(runId, caseId as string),
     enabled,
   });
   const evidenceQuery = useQuery({
-    queryKey: ["evidence", caseId],
-    queryFn: () => getEvidence(caseId as string),
+    queryKey: ["evidence", runId, caseId],
+    queryFn: () => getEvidence(runId, caseId as string),
     enabled,
   });
   const receiptQuery = useQuery({
-    queryKey: ["receipt", caseId],
-    queryFn: () => getReceipt(caseId as string),
+    queryKey: ["receipt", runId, caseId],
+    queryFn: () => getReceipt(runId, caseId as string),
     enabled,
   });
   const candidatesQuery = useQuery({
-    queryKey: ["candidates", caseId],
-    queryFn: () => getCandidates(caseId as string),
+    queryKey: ["candidates", runId, caseId],
+    queryFn: () => getCandidates(runId, caseId as string),
     enabled,
   });
   const aiQuery = useQuery({
-    queryKey: ["ai-analysis", caseId],
-    queryFn: () => getAIAnalysis(caseId as string),
+    queryKey: ["ai-analysis", runId, caseId],
+    queryFn: () => getAIAnalysis(runId, caseId as string),
     enabled: Boolean(caseId && caseQuery.data?.ai_assisted),
     retry: false,
   });
@@ -165,18 +171,7 @@ export function EvidenceDrawer({
     enabled,
   });
 
-  useEffect(() => {
-    if (!caseId) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !reviewOpen) onClose();
-    };
-    document.addEventListener("keydown", closeOnEscape);
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", closeOnEscape);
-      document.body.style.overflow = "";
-    };
-  }, [caseId, onClose, reviewOpen]);
+  useEffect(() => { setNotice(null); setReviewOpen(false); }, [caseId]);
 
   const caseData = caseQuery.data;
   const caseRecords = caseData?.records;
@@ -187,21 +182,17 @@ export function EvidenceDrawer({
       label: titleCase(stringValue(record.component_type, "Settlement component")),
       amountPaise: Math.abs(numberValue(record.amount_paise)),
       sign: stringValue(record.direction, "CREDIT") === "DEBIT" ? "debit" : "credit",
-      passed: true,
+      id: stringValue(record.entity_id, `${record.source_type}-${components.indexOf(record)}`),
     }));
-    const bank = records.find(
-      (record) => record.source_type === "bank_transactions" && record.direction !== "DEBIT",
-    );
-    return {
-      lines,
-      bankCreditPaise: numberValue(bank?.amount_paise),
-    };
-  }, [records]);
+    const bankEdges = evidenceQuery.data?.edges.filter((edge) => edge.relationship_type === "settlement_bank") ?? [];
+    return { lines, bankCreditPaise: bankEdges.length ? bankEdges.reduce((sum, edge) => sum + edge.allocated_amount_paise, 0) : null };
+  }, [records, evidenceQuery.data]);
+
   const auditEvents = (auditQuery.data?.items ?? []).filter((item) => item.case_id === caseId);
   const isLoading =
     caseQuery.isLoading || evidenceQuery.isLoading || receiptQuery.isLoading || candidatesQuery.isLoading;
   const reviewable = Boolean(
-    caseData &&
+    identity?.permissions.includes("review") && caseData &&
       [
         "ACTIONABLE_EXCEPTION",
         "SUGGESTED_FOR_REVIEW",
@@ -253,6 +244,10 @@ export function EvidenceDrawer({
         onClick={onClose}
       />
       <aside
+        ref={drawerRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
         aria-label={`Evidence for ${caseId}`}
         className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[880px] flex-col overflow-hidden border-l border-[#cbd5d0] bg-[#f3f6f5] shadow-[-18px_0_48px_rgba(17,33,27,0.16)]"
         data-testid="evidence-drawer"
@@ -300,7 +295,7 @@ export function EvidenceDrawer({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-        {isLoading || !caseData ? (
+        {caseQuery.error || evidenceQuery.error || receiptQuery.error || candidatesQuery.error ? <ErrorState title="Case evidence unavailable" message="Some proof could not be loaded. Retry before making a review decision." error={caseQuery.error ?? evidenceQuery.error ?? receiptQuery.error ?? candidatesQuery.error} onRetry={() => { void Promise.all([caseQuery.refetch(), evidenceQuery.refetch(), receiptQuery.refetch(), candidatesQuery.refetch()]); }} /> : isLoading || !caseData ? (
           <div className="space-y-4 p-4 sm:p-6">
             <div className="skeleton h-28" />
             <div className="skeleton h-72" />
@@ -330,6 +325,7 @@ export function EvidenceDrawer({
             </section>
 
             {caseData.exception_code ? <ExceptionCard caseData={caseData} /> : null}
+            <details className="rounded border border-slate-200 bg-white p-3 text-xs"><summary className="cursor-pointer font-semibold">Baseline and current review proof</summary><dl className="mt-3 space-y-2 break-all"><div><dt className="font-semibold">Immutable engine baseline checksum</dt><dd className="m-0 font-mono">{receiptQuery.data?.baseline_result_checksum ?? receiptQuery.data?.result_checksum ?? "Unavailable"}</dd></div><div><dt className="font-semibold">Current review checksum</dt><dd className="m-0 font-mono">{receiptQuery.data?.current_review_checksum ?? "Unavailable"}</dd></div></dl>{receiptQuery.data?.review_checksum_payload ? <pre className="mt-3 max-h-60 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2">{JSON.stringify(receiptQuery.data.review_checksum_payload, null, 2)}</pre> : null}</details>
 
             <section aria-labelledby="source-records-heading">
               <div className="mb-3 flex items-center gap-2">
@@ -364,11 +360,13 @@ export function EvidenceDrawer({
 
             <EquationCard
               bankCreditPaise={equation.bankCreditPaise}
+              bankVerified={Boolean(receiptQuery.data?.all_invariants_passed && caseData.case_state === "RECONCILED")}
               lines={equation.lines}
               netSettlementPaise={caseData.net_amount_paise}
               residualPaise={caseData.residual_paise}
             />
 
+            {auditQuery.error ? <ErrorState title="Audit timeline unavailable" message={auditQuery.error.message} error={auditQuery.error} onRetry={() => void auditQuery.refetch()} /> : null}
             <section className="panel overflow-hidden" aria-labelledby="invariants-heading">
               <div className="panel-header">
                 <div>
@@ -578,7 +576,7 @@ export function EvidenceDrawer({
                 <h3 className="m-0 text-[0.76rem] font-bold text-[#27352f]" id="review-controls-heading">
                   Human decision
                 </h3>
-                <p className="mb-0 mt-0.5 text-[0.62rem] text-[#718079]">Recorded as demo.finance.operator</p>
+                <p className="mb-0 mt-0.5 text-[0.62rem] text-[#718079]">Recorded as {identity?.subject ?? "authenticated operator"}</p>
               </div>
               {notice ? (
                 <span className="inline-flex items-center gap-1.5 text-[0.66rem] font-bold text-[#08724f]" role="status">

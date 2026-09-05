@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Banknote,
   Bot,
@@ -17,9 +17,9 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { getRun } from "@/lib/api";
+import { getRun, getMetrics } from "@/lib/api";
 import { shortId, titleCase } from "@/lib/format";
 
 import { BrandMark } from "./BrandMark";
@@ -34,13 +34,28 @@ const navItems = [
 
 export function RunShell({ runId, children }: { runId: string; children: React.ReactNode }) {
   const pathname = usePathname();
+  const queryClient = useQueryClient();
+  const revision = useRef<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isClaimsModalOpen, setIsClaimsModalOpen] = useState(false);
   const runQuery = useQuery({
     queryKey: ["run", runId],
     queryFn: () => getRun(runId),
+    refetchInterval: 10_000,
   });
   const run = runQuery.data;
+  const metricsQuery = useQuery({ queryKey: ["metrics", runId], queryFn: () => getMetrics(runId), enabled: run?.status === "COMPLETED" });
+  const ai = metricsQuery.data?.metrics.ai as { enabled?: boolean; warnings?: unknown[]; calls?: number } | undefined;
+  useEffect(() => {
+    if (!run) return;
+    const next = `${runId}:${run.execution_revision}:${run.review_revision}`;
+    if (revision.current && revision.current !== next) {
+      void queryClient.invalidateQueries({ predicate: (query) => query.queryKey[1] === runId && query.queryKey[0] !== "run" });
+    }
+    revision.current = next;
+  }, [run, runId, queryClient]);
+  const aiEnabled = ai?.enabled === true;
+  const aiLabel = !ai ? "AI status unavailable" : !aiEnabled ? "AI disabled" : ai.warnings?.length ? "AI partial / fallback" : "AI analysis recorded";
 
   function isActive(segment: string) {
     const target = `/runs/${runId}${segment}`;
@@ -48,7 +63,7 @@ export function RunShell({ runId, children }: { runId: string; children: React.R
   }
 
   async function copyRunId() {
-    await navigator.clipboard.writeText(runId);
+    try { await navigator.clipboard.writeText(runId); } catch { return; }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600);
   }
@@ -158,7 +173,7 @@ export function RunShell({ runId, children }: { runId: string; children: React.R
             Claims Ledger
           </span>
           <span className="rounded-full bg-[#10b981]/20 border border-[#10b981]/40 px-2 py-0.5 text-[0.62rem] font-extrabold text-[#34d399]">
-            10/10 Verified
+            Inspect evidence
           </span>
         </button>
 
@@ -168,13 +183,13 @@ export function RunShell({ runId, children }: { runId: string; children: React.R
           <section className="rounded-[8px] border border-[#1e293b] bg-[#0c1a32] p-3 text-[0.64rem] text-[#94a3b8]">
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 font-bold text-[#f1f5f9]">
-                {run?.ai_model ? <Sparkles aria-hidden="true" size={13} className="text-[#a78bfa]" /> : <Bot aria-hidden="true" size={13} className="text-[#38bdf8]" />}
-                {run?.ai_model ? "AI Analyst Ready" : "Deterministic Mode"}
+                {aiEnabled ? <Sparkles aria-hidden="true" size={13} className="text-[#a78bfa]" /> : <Bot aria-hidden="true" size={13} className="text-[#38bdf8]" />}
+                {aiLabel}
               </span>
-              <span className={`status-dot ${run?.ai_model ? "text-[#a78bfa]" : "text-[#10b981]"}`} />
+              <span className={`status-dot ${aiEnabled ? "text-[#a78bfa]" : "text-[#10b981]"}`} />
             </div>
             <p className="mb-0 mt-2 leading-4 text-[#94a3b8]">
-              {run?.ai_model ?? "Financial verification remains authoritative."}
+              {aiEnabled ?? "Financial verification remains authoritative."}
             </p>
           </section>
           <Link
@@ -216,7 +231,7 @@ export function RunShell({ runId, children }: { runId: string; children: React.R
                 <Scale aria-hidden="true" size={12} className="text-[#38bdf8]" />
                 <span className="hidden sm:inline">Claims Ledger</span>
                 <span className="rounded bg-[#082866] border border-[#38bdf8]/40 px-1.5 py-0.5 text-[0.58rem] font-extrabold text-[#38bdf8]">
-                  10/10 Verified
+                  Inspect evidence
                 </span>
               </button>
               <span className="hidden items-center gap-1.5 rounded-[6px] border border-[#a7f3d0] bg-[#ecfdf5] px-2.5 py-1.5 text-[0.64rem] font-bold text-[#065f46] sm:inline-flex">
@@ -230,8 +245,8 @@ export function RunShell({ runId, children }: { runId: string; children: React.R
                     : "border-[#e2e8f0] bg-[#f8fafc] text-[#475569]"
                 }`}
               >
-                {run?.ai_model ? <Sparkles aria-hidden="true" size={12} /> : <Bot aria-hidden="true" size={12} />}
-                {run?.ai_model ? "AI Ready" : "Deterministic"}
+                {aiEnabled ? <Sparkles aria-hidden="true" size={12} /> : <Bot aria-hidden="true" size={12} />}
+                {aiLabel}
               </span>
             </div>
           </div>

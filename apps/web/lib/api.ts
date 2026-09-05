@@ -3,6 +3,10 @@ import { z } from "zod";
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api";
 
+let accessToken = "";
+export function setAccessToken(token: string) { accessToken = token; }
+export function accessHeaders(): Record<string, string> { return accessToken ? { Authorization: `Bearer ${accessToken}` } : {}; }
+
 const nullableString = z.string().nullable();
 const dateString = z.string();
 const unknownRecord = z.record(z.string(), z.unknown());
@@ -38,6 +42,12 @@ export const runSchema = z.object({
   failure_reason: nullableString,
   created_at: dateString,
   files: z.array(sourceFileSchema),
+  parent_run_id: nullableString.optional().default(null),
+  execution_revision: z.number().optional().default(0),
+  review_revision: z.number().optional().default(0),
+  stage: nullableString.optional().default(null),
+  progress_percent: z.number().optional().default(0),
+  processed_records: z.number().optional().default(0),
 });
 
 export const fileValidationSchema = z.object({
@@ -55,6 +65,8 @@ export const validationSchema = z.object({
   run_id: z.string(),
   valid: z.boolean(),
   missing_source_types: z.array(z.string()),
+  required_sources_present: z.boolean().optional(),
+  processing_permitted: z.boolean().optional(),
   files: z.array(fileValidationSchema),
   total_rows: z.number(),
   invalid_rows: z.number(),
@@ -78,10 +90,20 @@ export const reconciliationSchema = z.object({
 export const metricsSchema = z.object({
   run_id: z.string(),
   status: z.string(),
+  execution_revision: z.number().optional().default(1),
+  review_revision: z.number().optional().default(0),
+  metrics_scope: z.string().optional().default("CURRENT_REVIEW_PROJECTION"),
+  evaluation_scope: nullableString.optional().default(null),
+  evaluated_review_revision: z.number().nullable().optional().default(null),
   metrics: unknownRecord,
 });
 
 export const runStatusSchema = z.object({
+  stage: nullableString.optional().default(null),
+  progress_percent: z.number().optional().default(0),
+  processed_records: z.number().optional().default(0),
+  execution_revision: z.number().optional().default(0),
+  review_revision: z.number().optional().default(0),
   run_id: z.string(),
   status: z.string(),
   failure_reason: nullableString,
@@ -102,6 +124,13 @@ export const caseSummarySchema = z.object({
   exception_severity: nullableString,
   amount_at_risk_paise: z.number(),
   cash_bucket: nullableString,
+  cash_bucket_contribution_paise: z.number().optional(),
+  cash_contribution_basis: z.string().optional(),
+  event_at: nullableString.optional().default(null),
+  age_days: z.number().nullable().optional().default(null),
+  sla_due_at: nullableString.optional().default(null),
+  days_past_sla: z.number().nullable().optional().default(null),
+  review_due_at: nullableString.optional().default(null),
   settlement_id: nullableString,
   bank_receipt_state: nullableString,
   owner_role: nullableString,
@@ -162,6 +191,9 @@ export const receiptSchema = z.object({
   all_invariants_passed: z.boolean(),
   invariants: z.array(invariantSchema),
   evidence_edge_count: z.number(),
+  baseline_result_checksum: nullableString.optional(),
+  current_review_checksum: nullableString.optional(),
+  review_checksum_payload: unknownRecord.optional(),
   result_checksum: nullableString,
 });
 
@@ -191,6 +223,11 @@ const cashBucketSchema = z.object({
 });
 
 export const cashPositionSchema = z.object({
+  as_of_at: nullableString.optional(),
+  execution_revision: z.number().optional(),
+  review_revision: z.number().optional(),
+  cash_scope: z.string().optional(),
+  deductions_already_in_settlement_net: z.boolean().optional(),
   run_id: z.string(),
   currency: z.string(),
   bank_confirmed_paise: z.number(),
@@ -214,13 +251,19 @@ export const cashForecastDaySchema = z.object({
   expected_inflow_paise: z.number(),
   scheduled_deductions_paise: z.number(),
   closing_cash_paise: z.number(),
-  confidence_score: z.number(),
+  confidence_score: z.number().nullable(),
+  confidence_basis: z.string().optional(),
   case_count: z.number(),
   case_ids: z.array(z.string()),
   settlement_ids: z.array(z.string()),
 });
 
 export const cashForecastResponseSchema = z.object({
+  execution_revision: z.number().optional().default(1),
+  review_revision: z.number().optional().default(0),
+  overdue_inflow_paise: z.number().optional().default(0),
+  undated_inflow_paise: z.number().optional().default(0),
+  forecast_scope: z.string().optional(),
   run_id: z.string(),
   as_of_date: z.string(),
   currency: z.string(),
@@ -242,9 +285,12 @@ export const taxDiscrepancyItemSchema = z.object({
   expected_tax_paise: z.number(),
   tax_variance_paise: z.number(),
   exception_code: nullableString,
+  discrepancy_code: z.string().default("POLICY_VARIANCE"),
 });
 
 export const taxAuditResponseSchema = z.object({
+  execution_revision: z.number().optional().default(1),
+  review_revision: z.number().optional().default(0),
   run_id: z.string(),
   currency: z.string(),
   total_cases_audited: z.number(),
@@ -255,13 +301,25 @@ export const taxAuditResponseSchema = z.object({
   total_tax_paise: z.number(),
   expected_tax_paise: z.number(),
   tax_variance_paise: z.number(),
-  claimable_itc_paise: z.number(),
+  claimable_itc_paise: z.number().nullable(),
   disputed_tax_paise: z.number(),
-  tax_policy_pass_rate: z.number(),
-  fee_policy_pass_rate: z.number(),
+  tax_policy_pass_rate: z.number().nullable(),
+  fee_policy_pass_rate: z.number().nullable(),
   discrepant_case_count: z.number(),
+  unmatched_component_count: z.number(),
   discrepancies: z.array(taxDiscrepancyItemSchema),
   itc_status: z.string(),
+  evidence_status: z.string().optional(),
+  external_tax_statement_available: z.boolean().optional().default(false),
+  policy_id: nullableString.optional(),
+  policy_version: nullableString.optional(),
+  gateway_fee_rate_numerator: z.number().optional(),
+  gateway_fee_rate_denominator: z.number().optional(),
+  tax_rate_numerator: z.number().optional(),
+  tax_rate_denominator: z.number().optional(),
+  checked_payment_count: z.number().optional(),
+  supported_tax_paise: z.number().optional(),
+  consistency_status: z.string().optional(),
 });
 
 export const auditEventSchema = z.object({
@@ -290,6 +348,11 @@ export const auditSchema = z.object({
 export const evaluationSchema = z.object({
   run_id: z.string(),
   dataset_id: z.string(),
+  execution_revision: z.number().optional().default(1),
+  evaluated_review_revision: z.number().optional().default(0),
+  current_review_revision: z.number().optional().default(0),
+  evaluation_scope: z.string().optional().default("IMMUTABLE_ENGINE_BASELINE"),
+  baseline_result_checksum: nullableString.optional().default(null),
   aggregate: unknownRecord,
   scenario_breakdown: z.record(z.string(), unknownRecord),
 });
@@ -360,6 +423,8 @@ export class APIError extends Error {
     public readonly code: string,
     message: string,
     public readonly details: Record<string, unknown> = {},
+    public readonly requestId?: string,
+    public readonly retryable = status === 0 || status === 408 || status === 429 || status >= 500,
   ) {
     super(message);
     this.name = "APIError";
@@ -374,18 +439,49 @@ function idempotencyKey(scope: string): string {
   return `web-${scope}-${suffix}`;
 }
 
+const pendingMutationKeys = new Map<string, string>();
+
+async function mutationRequest<T>(
+  path: string,
+  schema: z.ZodType<T>,
+  scope: string,
+  init: RequestInit = {},
+  json = false,
+): Promise<T> {
+  const key = pendingMutationKeys.get(scope) ?? idempotencyKey(scope);
+  pendingMutationKeys.set(scope, key);
+  const headers = new Headers(init.headers);
+  headers.set("Idempotency-Key", key);
+  if (json) headers.set("Content-Type", "application/json");
+  try {
+    const result = await apiRequest(path, schema, {
+      ...init,
+      headers: Object.fromEntries(headers.entries()),
+    });
+    pendingMutationKeys.delete(scope);
+    return result;
+  } catch (error) {
+    if (!(error instanceof APIError) || !error.retryable) pendingMutationKeys.delete(scope);
+    throw error;
+  }
+}
+
 async function apiRequest<T>(
   path: string,
   schema: z.ZodType<T>,
   init: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  let response: Response;
+  try { response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       Accept: "application/json",
+      ...accessHeaders(),
       ...init.headers,
     },
-  });
+  }); } catch {
+    throw new APIError(0, "NETWORK_UNAVAILABLE", "The API could not be reached. Check your connection and retry; your saved work is preserved.");
+  }
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     const parsed = errorEnvelopeSchema.safeParse(payload);
@@ -395,63 +491,53 @@ async function apiRequest<T>(
         parsed.data.error.code,
         parsed.data.error.message,
         parsed.data.error.details,
+        parsed.data.error.request_id ?? response.headers.get("X-Request-ID") ?? undefined,
       );
     }
     throw new APIError(response.status, "REQUEST_FAILED", `Request failed (${response.status}).`);
   }
-  return schema.parse(payload);
-}
-
-function mutationHeaders(scope: string, json = false): HeadersInit {
-  return {
-    "Idempotency-Key": idempotencyKey(scope),
-    ...(json ? { "Content-Type": "application/json" } : {}),
-  };
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) throw new APIError(response.status, "INVALID_RESPONSE", "The service returned an unexpected response. Refresh the view or share the request ID with support.", {}, response.headers.get("X-Request-ID") ?? undefined, true);
+  return parsed.data;
 }
 
 export function loadDemoRun() {
-  return apiRequest("/runs/demo", demoRunSchema, {
+  return mutationRequest("/runs/demo", demoRunSchema, "demo", {
     method: "POST",
-    headers: mutationHeaders("demo"),
   });
 }
 
 export function createRun() {
-  return apiRequest("/runs", runSchema, {
+  return mutationRequest("/runs", runSchema, "create-run", {
     method: "POST",
-    headers: mutationHeaders("create-run", true),
     body: JSON.stringify({}),
-  });
+  }, true);
 }
 
 export async function uploadRunFiles(runId: string, files: Record<string, File>) {
   const form = new FormData();
   Object.entries(files).forEach(([sourceType, file]) => form.append(sourceType, file));
-  return apiRequest(`/runs/${runId}/files`, z.array(sourceFileSchema), {
+  return mutationRequest(`/runs/${runId}/files`, z.array(sourceFileSchema), `upload-${runId}`, {
     method: "POST",
-    headers: mutationHeaders(`upload-${runId}`),
     body: form,
   });
 }
 
 export function validateRun(runId: string) {
-  return apiRequest(`/runs/${runId}/validate`, validationSchema, {
+  return mutationRequest(`/runs/${runId}/validate`, validationSchema, `validate-${runId}`, {
     method: "POST",
-    headers: mutationHeaders(`validate-${runId}`),
   });
 }
 
 export function reconcileRun(runId: string) {
-  return apiRequest(`/runs/${runId}/reconcile`, reconciliationSchema, {
+  return mutationRequest(`/runs/${runId}/reconcile`, reconciliationSchema, `reconcile-${runId}`, {
     method: "POST",
-    headers: mutationHeaders(`reconcile-${runId}`),
   });
 }
 
 export function evaluateRun(runId: string) {
-  return apiRequest(`/runs/${runId}/evaluate`, evaluationSchema, {
+  return mutationRequest(`/runs/${runId}/evaluate`, evaluationSchema, `evaluate-${runId}`, {
     method: "POST",
-    headers: mutationHeaders(`evaluate-${runId}`),
   });
 }
 
@@ -487,26 +573,26 @@ export async function getCases(runId: string): Promise<PaginatedCases> {
   };
 }
 
-export function getCase(caseId: string) {
-  return apiRequest(`/cases/${encodeURIComponent(caseId)}`, caseDetailSchema);
+export function getCase(runId: string, caseId: string) {
+  return apiRequest(`/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}`, caseDetailSchema);
 }
 
-export function getEvidence(caseId: string) {
-  return apiRequest(`/cases/${encodeURIComponent(caseId)}/evidence`, evidenceGraphSchema);
+export function getEvidence(runId: string, caseId: string) {
+  return apiRequest(`/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}/evidence`, evidenceGraphSchema);
 }
 
-export function getReceipt(caseId: string) {
-  return apiRequest(`/cases/${encodeURIComponent(caseId)}/receipt`, receiptSchema);
+export function getReceipt(runId: string, caseId: string) {
+  return apiRequest(`/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}/receipt`, receiptSchema);
 }
 
-export function getCandidates(caseId: string) {
-  return apiRequest(`/cases/${encodeURIComponent(caseId)}/candidates`, candidatesSchema);
+export function getCandidates(runId: string, caseId: string) {
+  return apiRequest(`/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}/candidates`, candidatesSchema);
 }
 
-export async function getAIAnalysis(caseId: string): Promise<AIAnalysis | null> {
+export async function getAIAnalysis(runId: string, caseId: string): Promise<AIAnalysis | null> {
   try {
     return await apiRequest(
-      `/cases/${encodeURIComponent(caseId)}/ai-analysis`,
+      `/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}/ai-analysis`,
       aiAnalysisSchema,
     );
   } catch (error) {
@@ -519,8 +605,15 @@ export function getCashPosition(runId: string) {
   return apiRequest(`/runs/${runId}/cash-position`, cashPositionSchema);
 }
 
+async function getAllAudit(runId: string) {
+  const first = await apiRequest(`/runs/${runId}/audit?page=1&page_size=500`, auditSchema);
+  const rest = await Promise.all(Array.from({ length: Math.max(0, first.pages - 1) }, (_, i) =>
+    apiRequest(`/runs/${runId}/audit?page=${i + 2}&page_size=500`, auditSchema)));
+  return { ...first, items: [first, ...rest].flatMap((page) => page.items) };
+}
+
 export function getAudit(runId: string) {
-  return apiRequest(`/runs/${runId}/audit?page_size=500`, auditSchema);
+  return getAllAudit(runId);
 }
 
 export async function getEvaluation(runId: string): Promise<Evaluation | null> {
@@ -533,15 +626,15 @@ export async function getEvaluation(runId: string): Promise<Evaluation | null> {
 }
 
 export function submitReview(
+  runId: string,
   caseId: string,
   action: ReviewAction,
-  values: { reason?: string; note?: string; until?: string; owner_role?: string },
+  values: { reason?: string; note?: string; until?: string; owner_role?: string; expected_review_revision: number },
 ) {
-  return apiRequest(`/cases/${encodeURIComponent(caseId)}/${action}`, reviewActionSchema, {
+  return mutationRequest(`/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}/${action}`, reviewActionSchema, `${action}-${runId}-${caseId}`, {
     method: "POST",
-    headers: mutationHeaders(`${action}-${caseId}`, true),
-    body: JSON.stringify({ actor: "demo.finance.operator", ...values }),
-  });
+    body: JSON.stringify(values),
+  }, true);
 }
 
 export function exportUrl(runId: string, artifact: string) {
@@ -577,3 +670,9 @@ export function getTaxAudit(runId: string) {
   return apiRequest(`/runs/${runId}/tax-audit`, taxAuditResponseSchema);
 }
 
+
+const accessConfigSchema = z.object({ mode: z.enum(["local_demo", "shared"]), authentication_required: z.boolean() });
+const identitySchema = z.object({ subject: z.string(), role: z.enum(["viewer", "operator", "reviewer", "admin"]), is_demo: z.boolean(), permissions: z.array(z.string()) });
+export type Identity = z.infer<typeof identitySchema>;
+export function getAccessConfig() { return apiRequest("/auth/config", accessConfigSchema); }
+export function getIdentity() { return apiRequest("/auth/me", identitySchema); }

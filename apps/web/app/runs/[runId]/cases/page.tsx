@@ -22,7 +22,7 @@ import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { EvidenceDrawer } from "@/components/EvidenceDrawer";
 import { StatusBadge } from "@/components/StatusBadge";
 import { getCases, type CaseSummary } from "@/lib/api";
-import { ageDays, formatInteger, shortId, titleCase } from "@/lib/format";
+import { formatDateTime, formatInteger, shortId, titleCase } from "@/lib/format";
 
 const stateOptions = [
   "RECONCILED",
@@ -92,28 +92,30 @@ export default function CasesPage() {
   const { runId } = useParams<{ runId: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialStates = searchParams
-    .getAll("state")
-    .filter((state) => stateOptions.includes(state));
-  const initialBucket = searchParams.get("bucket") ?? "";
-  const initialAI = searchParams.get("ai") ?? "all";
-  const initialHuman = searchParams.get("human") ?? "all";
-  const [states, setStates] = useState<string[]>(initialStates);
-  const [severities, setSeverities] = useState<string[]>([]);
-  const [codes, setCodes] = useState<string[]>([]);
-  const [owner, setOwner] = useState("");
-  const [minAge, setMinAge] = useState("");
-  const [maxAge, setMaxAge] = useState("");
-  const [minAmount, setMinAmount] = useState("");
-  const [maxAmount, setMaxAmount] = useState("");
-  const [aiFilter, setAiFilter] = useState(initialAI);
-  const [humanFilter, setHumanFilter] = useState(initialHuman);
-  const [bucket, setBucket] = useState(initialBucket);
-  const [sort, setSort] = useState("risk_desc");
-  const [advancedOpen, setAdvancedOpen] = useState(
-    Boolean(initialBucket || initialAI !== "all" || initialHuman !== "all"),
-  );
-  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const states = searchParams.getAll("state").filter((state) => stateOptions.includes(state));
+  const severities = searchParams.getAll("severity");
+  const codes = searchParams.getAll("code");
+  const owner = searchParams.get("owner") ?? "";
+  const minAge = searchParams.get("minAge") ?? "";
+  const maxAge = searchParams.get("maxAge") ?? "";
+  const minAmount = searchParams.get("minAmount") ?? "";
+  const maxAmount = searchParams.get("maxAmount") ?? "";
+  const aiFilter = searchParams.get("ai") ?? "all";
+  const humanFilter = searchParams.get("human") ?? "all";
+  const bucket = searchParams.get("bucket") ?? "";
+  const sort = searchParams.get("sort") ?? "risk_desc";
+  const selectedCaseId = searchParams.get("case");
+  const search = searchParams.get("search") ?? "";
+  const [advancedOpen, setAdvancedOpen] = useState(Boolean(bucket || aiFilter !== "all" || humanFilter !== "all"));
+  const setSeverities = (v: string[]) => updateUrlFilters({ severity: v });
+  const setCodes = (v: string[]) => updateUrlFilters({ code: v });
+  const setOwner = (v: string) => updateUrlFilters({ owner: v });
+  const setMinAge = (v: string) => updateUrlFilters({ minAge: v });
+  const setMaxAge = (v: string) => updateUrlFilters({ maxAge: v });
+  const setMinAmount = (v: string) => updateUrlFilters({ minAmount: v });
+  const setMaxAmount = (v: string) => updateUrlFilters({ maxAmount: v });
+  const setSort = (v: string) => updateUrlFilters({ sort: v });
+  const setSelectedCaseId = (v: string | null) => updateUrlFilters({ case: v });
 
   const casesQuery = useQuery({ queryKey: ["cases", runId], queryFn: () => getCases(runId) });
   const caseItems = casesQuery.data?.items;
@@ -130,19 +132,19 @@ export default function CasesPage() {
   const scopedCases = useMemo(
     () =>
       cases.filter((item) => {
-      const age = ageDays(item.created_at);
+      const age = item.age_days;
       const riskRupees = item.amount_at_risk_paise / 100;
       return (
         (!severities.length || (item.exception_severity && severities.includes(item.exception_severity))) &&
         (!codes.length || (item.exception_code && codes.includes(item.exception_code))) &&
         (!owner || (item.owner_role ?? "").toLowerCase().includes(owner.toLowerCase())) &&
-        (!minAge || age >= Number(minAge)) &&
-        (!maxAge || age <= Number(maxAge)) &&
+        (!minAge || (age !== null && age >= Number(minAge))) &&
+        (!maxAge || (age !== null && age <= Number(maxAge))) &&
         (!minAmount || riskRupees >= Number(minAmount)) &&
         (!maxAmount || riskRupees <= Number(maxAmount)) &&
         (aiFilter === "all" || item.ai_assisted === (aiFilter === "yes")) &&
         (humanFilter === "all" || item.human_reviewed === (humanFilter === "reviewed")) &&
-        (!bucket || item.cash_bucket === bucket)
+        (!bucket || bucket.split(",").includes(item.cash_bucket ?? ""))
       );
       }),
     [aiFilter, bucket, cases, codes, humanFilter, maxAge, maxAmount, minAge, minAmount, owner, severities],
@@ -154,7 +156,7 @@ export default function CasesPage() {
       : [...scopedCases];
     return filtered.sort((left, right) => {
       if (sort === "risk_desc") return right.amount_at_risk_paise - left.amount_at_risk_paise;
-      if (sort === "age_desc") return ageDays(right.created_at) - ageDays(left.created_at);
+      if (sort === "age_desc") return (right.age_days ?? -1) - (left.age_days ?? -1);
       if (sort === "severity") {
         return (severityRank[right.exception_severity ?? ""] ?? 0) - (severityRank[left.exception_severity ?? ""] ?? 0);
       }
@@ -174,22 +176,18 @@ export default function CasesPage() {
   }
 
   function applyStates(values: string[]) {
-    setStates(values);
     updateUrlFilters({ state: values });
   }
 
   function applyBucket(value: string) {
-    setBucket(value);
     updateUrlFilters({ bucket: value || null });
   }
 
   function applyAI(value: string) {
-    setAiFilter(value);
     updateUrlFilters({ ai: value === "all" ? null : value });
   }
 
   function applyHuman(value: string) {
-    setHumanFilter(value);
     updateUrlFilters({ human: value === "all" ? null : value });
   }
 
@@ -198,18 +196,7 @@ export default function CasesPage() {
   }
 
   function resetFilters() {
-    setStates([]);
-    setSeverities([]);
-    setCodes([]);
-    setOwner("");
-    setMinAge("");
-    setMaxAge("");
-    setMinAmount("");
-    setMaxAmount("");
-    setAiFilter("all");
-    setHumanFilter("all");
-    setBucket("");
-    updateUrlFilters({ state: null, bucket: null, ai: null, human: null });
+    router.replace(`/runs/${runId}/cases`, { scroll: false });
   }
 
   const attentionStates = [
@@ -286,7 +273,15 @@ export default function CasesPage() {
 
   const columns: DataTableColumn<CaseSummary>[] = [
     {
+      key: "next_action", label: "Next action", compact: true,
+      render: (item) => <span className="block max-w-56 text-xs">{item.next_action ?? (item.case_state === "RECONCILED" ? "Verified — no action" : "Inspect evidence")}</span>,
+    },
+    { key: "sla_due", label: "Settlement SLA", render: (item) => item.sla_due_at ? <span className="text-xs">{formatDateTime(item.sla_due_at)}<span className="block">{item.days_past_sla ? `${item.days_past_sla}d overdue` : "Within SLA / completed"}</span></span> : "Not applicable" },
+    { key: "review_due", label: "Review due", render: (item) => item.review_due_at ? formatDateTime(item.review_due_at) : "Not assigned" },
+
+    {
       key: "case_id",
+      compact: true,
       label: "Case ID",
       sortValue: (item) => item.case_id,
       render: (item) => (
@@ -297,6 +292,7 @@ export default function CasesPage() {
     },
     {
       key: "state",
+      compact: true,
       label: "Final State",
       sortValue: (item) => item.case_state,
       render: (item) => <StatusBadge compact status={item.case_state} />,
@@ -311,6 +307,7 @@ export default function CasesPage() {
     },
     {
       key: "risk",
+      compact: true,
       label: "Amount at Risk",
       sortValue: (item) => item.amount_at_risk_paise,
       render: (item) => (
@@ -350,9 +347,9 @@ export default function CasesPage() {
     },
     {
       key: "age",
-      label: "Age",
-      sortValue: (item) => ageDays(item.created_at),
-      render: (item) => `${ageDays(item.created_at)}d`,
+      label: "Event age",
+      sortValue: (item) => item.age_days ?? -1,
+      render: (item) => item.age_days === null ? "Unknown event date" : `${item.age_days}d`,
     },
     {
       key: "exception",
@@ -381,6 +378,8 @@ export default function CasesPage() {
       render: (item) => (item.ai_assisted ? <AIBadge compact /> : <span className="text-[#909994]">—</span>),
     },
   ];
+  const primaryOrder = ["case_id", "state", "risk", "next_action"];
+  columns.sort((a, b) => (primaryOrder.includes(a.key) ? primaryOrder.indexOf(a.key) : 99) - (primaryOrder.includes(b.key) ? primaryOrder.indexOf(b.key) : 99));
 
   return (
     <div className="space-y-5">
@@ -601,6 +600,8 @@ export default function CasesPage() {
             }
             getRowKey={(item) => item.case_id}
             onRowClick={(item) => setSelectedCaseId(item.case_id)}
+            query={search}
+            onQueryChange={(value) => updateUrlFilters({ search: value })}
             pageSize={15}
             rows={filteredCases}
             testId="cases-table"

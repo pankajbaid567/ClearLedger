@@ -14,10 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import EvidenceEdge as DBEvidenceEdge
 from db.models import ReconciliationCase as DBReconciliationCase
 from db.models import ReconciliationRun
-from db.repositories import AuditRepository, CaseRepository, ReviewRepository
+from db.repositories import AuditRepository, CaseRepository, ReviewRepository, RunRepository
 from packages.domain.enums import ActorType, CaseState, CashBucket, DecisionLevel
 from packages.domain.exceptions import InvariantError
-from services.normalization.policy import load_policy
+from services.normalization.policy import SettlementPolicy
 from services.reconciliation.evidence import EvidenceEdge, EvidenceGraph
 from services.reconciliation.invariants import verify_case
 from services.reconciliation.models import (
@@ -31,8 +31,16 @@ logger = logging.getLogger(__name__)
 
 
 class ReviewService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: uuid.UUID | None = None,
+        expected_review_revision: int | None = None,
+    ) -> None:
         self.session = session
+        self.run_id = run_id
+        self.expected_review_revision = expected_review_revision
         self.cases = CaseRepository(session)
         self.reviews = ReviewRepository(session)
         self.audit = AuditRepository(session)
@@ -59,10 +67,12 @@ class ReviewService:
                 item.passed for item in refreshed_invariants
             )
         else:
-            invariants = await self.cases.invariants_for_case(
-                case.reconciliation_run_id, case.case_id
+            _, refreshed_invariants, approved_net_paise = await self._reverify_suggestion(
+                case, include_suggestion=False
             )
-            invariant_passed = bool(invariants) and all(item.passed for item in invariants)
+            invariant_passed = bool(refreshed_invariants) and all(
+                item.passed for item in refreshed_invariants
+            )
             invariant_passed = invariant_passed and case.residual_paise == 0
         previous_state = case.case_state
         new_state = (
@@ -122,6 +132,8 @@ class ReviewService:
     async def _reverify_suggestion(
         self,
         case: DBReconciliationCase,
+        *,
+        include_suggestion: bool = True,
     ) -> tuple[DBEvidenceEdge | None, list[DomainInvariantResult], int]:
         db_edges = await self.cases.evidence_for_case(
             case.reconciliation_run_id,
@@ -133,12 +145,13 @@ class ReviewService:
             if edge.actor_type == ActorType.AI_SUGGESTION.value
             and edge.decision_level == DecisionLevel.SUGGESTED.value
         ]
-        if len(suggestions) != 1:
+        if include_suggestion and len(suggestions) != 1:
             return None, [], case.net_amount_paise
-        suggestion = suggestions[0]
-        stored_checks = suggestion.verification_checks or []
-        if not stored_checks or not all(item.get("passed") is True for item in stored_checks):
-            return None, [], case.net_amount_paise
+        suggestion = suggestions[0] if include_suggestion else None
+        if suggestion is not None:
+            stored_checks = suggestion.verification_checks or []
+            if not stored_checks or not all(item.get("passed") is True for item in stored_checks):
+                return None, [], case.net_amount_paise
 
         try:
             records = [
@@ -149,6 +162,7 @@ class ReviewService:
                 case_id=case.case_id,
                 source_entity_ids=case.source_entity_ids,
                 records=records,
+                invalid_reasons=[issue for record in records for issue in record.issues],
                 case_state=CaseState.SUGGESTED_FOR_REVIEW,
                 cash_bucket=CashBucket(case.cash_bucket or CashBucket.UNRESOLVED.value),
                 gross_amount_paise=case.gross_amount_paise,
@@ -173,7 +187,7 @@ class ReviewService:
                     )
 
             for db_edge in db_edges:
-                is_reviewed_suggestion = db_edge.id == suggestion.id
+                is_reviewed_suggestion = suggestion is not None and db_edge.id == suggestion.id
                 if (
                     db_edge.decision_level != DecisionLevel.VERIFIED.value
                     and not is_reviewed_suggestion
@@ -198,7 +212,15 @@ class ReviewService:
                         reconciliation_run_id=str(db_edge.reconciliation_run_id),
                     )
                 )
-            refreshed = verify_case(domain_case, evidence, load_policy())
+            run = await self.session.get(ReconciliationRun, case.reconciliation_run_id)
+            if run is None:
+                return None, [], case.net_amount_paise
+            snapshot = run.policy_snapshot
+            if not snapshot and run.policy_version_id:
+                record = await RunRepository(self.session).get_policy(run.policy_version_id)
+                snapshot = record.policy_data if record else {}
+            policy = SettlementPolicy.model_validate(snapshot)
+            refreshed = verify_case(domain_case, evidence, policy)
         except (InvariantError, ValueError, TypeError) as exc:
             logger.warning(
                 "Reviewed suggestion failed full verification for case %s: %s",
@@ -325,6 +347,7 @@ class ReviewService:
         )
         await self.reviews.create_follow_up_task(
             case_id=case.case_id,
+            reconciliation_run_id=case.reconciliation_run_id,
             task_type="RECHECK_AFTER_SLA",
             amount_at_risk_paise=case.amount_at_risk_paise,
             required_evidence="Recheck source and bank evidence after defer date",
@@ -355,13 +378,18 @@ class ReviewService:
             note=note,
         )
         await self.cases.update_case(case, owner_role=owner_role, human_reviewed=True)
+        exception = await self.cases.exception_for_case(case.reconciliation_run_id, case.case_id)
+        if exception is not None:
+            exception.owner_role = owner_role
         await self._audit_transition(case, decision, details={"owner_role": owner_role})
         await self.recalculate_aggregates(case.reconciliation_run_id)
         return decision
 
     async def create_task(self, case_id: str, *, actor: str, **values: Any) -> Any:
         case = await self._require_case(case_id)
-        task = await self.reviews.create_follow_up_task(case_id=case.case_id, **values)
+        task = await self.reviews.create_follow_up_task(
+            case_id=case.case_id, reconciliation_run_id=case.reconciliation_run_id, **values
+        )
         await self.audit.create(
             reconciliation_run_id=case.reconciliation_run_id,
             case_id=case.case_id,
@@ -401,6 +429,9 @@ class ReviewService:
             cash_bucket=cash_bucket,
             human_reviewed=True,
         )
+        exception = await self.cases.exception_for_case(case.reconciliation_run_id, case.case_id)
+        if exception is not None:
+            exception.human_review_state = new_state
         await self._audit_transition(case, decision)
         await self.recalculate_aggregates(case.reconciliation_run_id)
         return decision
@@ -435,35 +466,26 @@ class ReviewService:
             select(DBReconciliationCase).where(DBReconciliationCase.reconciliation_run_id == run_id)
         )
         cases = list(result)
-        buckets: dict[str, dict[str, Any]] = {
-            bucket.value: {"bucket": bucket.value, "amount_paise": 0, "case_ids": []}
-            for bucket in CashBucket
-        }
-        for case in cases:
-            bucket = case.cash_bucket or CashBucket.UNRESOLVED.value
-            buckets[bucket]["amount_paise"] += self._case_amount(case)
-            buckets[bucket]["case_ids"].append(case.case_id)
+        from services.cash_position.service import calculate_cash_position
 
+        domain_cases = [
+            DomainReconciliationCase(
+                case_id=case.case_id,
+                source_entity_ids=case.source_entity_ids,
+                records=[
+                    NormalizedRecord.model_validate_json(json.dumps(item))
+                    for item in case.record_snapshot
+                ],
+                case_state=CaseState(case.case_state),
+                cash_bucket=CashBucket(case.cash_bucket or "UNRESOLVED"),
+                gross_amount_paise=case.gross_amount_paise,
+                net_amount_paise=case.net_amount_paise,
+                residual_paise=case.residual_paise,
+            )
+            for case in cases
+        ]
+        cash = calculate_cash_position(domain_cases, EvidenceGraph()).model_dump(mode="json")
         snapshot = await self.cases.cash_position(run_id)
-        deductions = {
-            "scheduled_refunds_paise": snapshot.scheduled_refunds_paise if snapshot else 0,
-            "known_disputes_paise": snapshot.known_disputes_paise if snapshot else 0,
-            "known_reserve_holds_paise": snapshot.known_reserve_holds_paise if snapshot else 0,
-        }
-        bank = buckets[CashBucket.BANK_CONFIRMED.value]["amount_paise"]
-        transit = buckets[CashBucket.SETTLEMENT_CONFIRMED_IN_TRANSIT.value]["amount_paise"]
-        cash = {
-            "buckets": buckets,
-            "bank_confirmed_paise": bank,
-            "settlement_confirmed_in_transit_paise": transit,
-            "expected_settlement_paise": buckets[CashBucket.EXPECTED_SETTLEMENT.value][
-                "amount_paise"
-            ],
-            "at_risk_paise": buckets[CashBucket.AT_RISK.value]["amount_paise"],
-            "unresolved_paise": buckets[CashBucket.UNRESOLVED.value]["amount_paise"],
-            **deductions,
-            "safe_cash_paise": bank + transit - sum(deductions.values()),
-        }
         if snapshot is not None:
             for key, value in cash.items():
                 setattr(snapshot, key, value)
@@ -493,16 +515,17 @@ class ReviewService:
 
     @staticmethod
     def _case_amount(case: DBReconciliationCase) -> int:
-        if case.cash_bucket in {
-            CashBucket.BANK_CONFIRMED.value,
-            CashBucket.SETTLEMENT_CONFIRMED_IN_TRANSIT.value,
-            CashBucket.EXPECTED_SETTLEMENT.value,
-        }:
-            return case.net_amount_paise
-        return abs(case.residual_paise or case.net_amount_paise or case.gross_amount_paise)
+        from services.cash_position.service import cash_bucket_contribution
+
+        return cash_bucket_contribution(
+            case.cash_bucket or "UNRESOLVED",
+            case.net_amount_paise,
+            case.residual_paise,
+            case.gross_amount_paise,
+        )[0]
 
     async def _require_case(self, case_id: str) -> DBReconciliationCase:
-        case = await self.cases.get_case(case_id)
+        case = await self.cases.get_case(case_id, self.run_id)
         if case is None:
             raise RunServiceError(
                 "CASE_NOT_FOUND",
@@ -510,6 +533,32 @@ class ReviewService:
                 status_code=404,
                 details={"case_id": case_id},
             )
+        run = await RunRepository(self.session).get_for_update(case.reconciliation_run_id)
+        if run is None or run.status != "COMPLETED":
+            raise RunServiceError(
+                "RUN_NOT_REVIEWABLE", "Review requires a completed execution.", status_code=409
+            )
+        if self.expected_review_revision is None:
+            raise RunServiceError(
+                "REVIEW_REVISION_REQUIRED",
+                "A review revision is required for every human mutation.",
+                status_code=409,
+                details={"review_revision": run.review_revision},
+            )
+        if run.review_revision != self.expected_review_revision:
+            raise RunServiceError(
+                "STALE_REVIEW_REVISION",
+                "This run changed. Refresh the evidence before reviewing.",
+                status_code=409,
+                details={"review_revision": run.review_revision},
+            )
+        # Refetch after the run lock: another operator may have committed while this
+        # request waited. All review writes and aggregate reads now serialize per run.
+        case = await self.cases.get_case(case_id, run.id)
+        if case is None:
+            raise RunServiceError("CASE_NOT_FOUND", "The case is unavailable.", status_code=404)
+        run.review_revision += 1
+        await self.session.flush()
         return case
 
     @staticmethod

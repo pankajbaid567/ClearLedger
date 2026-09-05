@@ -12,7 +12,6 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -56,7 +55,40 @@ class PolicyVersion(UuidPrimaryKeyMixin, CreatedAtMixin, Base):
 
 class ReconciliationRun(UuidPrimaryKeyMixin, CreatedAtMixin, Base):
     __tablename__ = "reconciliation_runs"
+    __table_args__ = (
+        UniqueConstraint("parent_run_id", name="uq_reconciliation_runs_parent_run_id"),
+    )
 
+    owner_subject: Mapped[str | None] = mapped_column(Text, index=True)
+    parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("reconciliation_runs.id")
+    )
+    execution_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    review_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    as_of_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    stage: Mapped[str] = mapped_column(
+        Text, nullable=False, default="created", server_default="created"
+    )
+    progress_percent: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    processed_records: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    execution_attempt_token: Mapped[str | None] = mapped_column(Text)
+    execution_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    policy_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    input_manifest: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="CREATED")
     policy_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("policy_versions.id")
@@ -322,6 +354,7 @@ class ReconciliationCase(UuidPrimaryKeyMixin, CreatedAtMixin, Base):
 class CandidateRelationship(UuidPrimaryKeyMixin, CreatedAtMixin, Base):
     __tablename__ = "candidate_relationships"
     __table_args__ = (
+        CheckConstraint("match_score BETWEEN 0 AND 10000", name="ck_candidate_match_score_range"),
         Index("ix_candidates_run_id", "reconciliation_run_id"),
         Index("ix_candidates_source", "source_entity_id"),
         Index("ix_candidates_target", "target_entity_id"),
@@ -446,7 +479,9 @@ class AIAnalysis(UuidPrimaryKeyMixin, CreatedAtMixin, Base):
     tokens_prompt: Mapped[int | None] = mapped_column(Integer)
     tokens_completion: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
-    estimated_cost: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)  # Micro-dollars ($0.000001)
+    estimated_cost: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )  # Micro-dollars ($0.000001)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     validation_passed: Mapped[bool | None] = mapped_column(Boolean)
     validation_errors: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
@@ -466,6 +501,12 @@ class HumanDecision(UuidPrimaryKeyMixin, CreatedAtMixin, Base):
     reconciliation_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("reconciliation_runs.id", ondelete="CASCADE"), nullable=False
     )
+    execution_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    review_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     action: Mapped[str] = mapped_column(Text, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     previous_state: Mapped[str] = mapped_column(Text, nullable=False)
@@ -483,6 +524,9 @@ class FollowUpTask(UuidPrimaryKeyMixin, CreatedAtMixin, Base):
     )
 
     case_id: Mapped[str] = mapped_column(Text, nullable=False)
+    reconciliation_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("reconciliation_runs.id"), nullable=False, index=True
+    )
     task_type: Mapped[str] = mapped_column(Text, nullable=False)
     amount_at_risk_paise: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="INR")
@@ -543,8 +587,12 @@ class CashPositionSnapshot(UuidPrimaryKeyMixin, CreatedAtMixin, Base):
 class IdempotencyRecord(UuidPrimaryKeyMixin, CreatedAtMixin, Base):
     __tablename__ = "idempotency_records"
     __table_args__ = (
+        CheckConstraint(
+            "state IN ('IN_PROGRESS', 'COMPLETED')", name="ck_idempotency_state"
+        ),
         UniqueConstraint("scope", "idempotency_key"),
         Index("ix_idempotency_created_at", "created_at"),
+        Index("ix_idempotency_lease", "state", "lease_expires_at"),
     )
 
     scope: Mapped[str] = mapped_column(Text, nullable=False)
@@ -552,3 +600,8 @@ class IdempotencyRecord(UuidPrimaryKeyMixin, CreatedAtMixin, Base):
     request_checksum: Mapped[str] = mapped_column(Text, nullable=False)
     response_status: Mapped[int] = mapped_column(Integer, nullable=False)
     response_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    state: Mapped[str] = mapped_column(
+        Text, nullable=False, default="COMPLETED", server_default="COMPLETED"
+    )
+    claim_token: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.app.errors import APIError
 from db.models import (
     AIAnalysis,
     CandidateRelationship,
@@ -17,6 +18,7 @@ from db.models import (
     ExceptionRecord,
     InvariantResult,
     ReconciliationCase,
+    ReconciliationRun,
 )
 
 
@@ -33,6 +35,7 @@ class CaseRepository:
             EvidenceEdge,
             CandidateRelationship,
             ReconciliationCase,
+            ReconciliationRun,
         ):
             await self.session.execute(delete(model).where(model.reconciliation_run_id == run_id))
 
@@ -66,20 +69,34 @@ class CaseRepository:
         conditions = [ReconciliationCase.case_id == case_id]
         if run_id is not None:
             conditions.append(ReconciliationCase.reconciliation_run_id == run_id)
+        principal = self.session.info.get("principal")
+        if principal is not None:
+            conditions.append(ReconciliationRun.owner_subject == principal.subject)
         result = await self.session.scalars(
             select(ReconciliationCase)
+            .join(
+                ReconciliationRun, ReconciliationRun.id == ReconciliationCase.reconciliation_run_id
+            )
             .where(*conditions)
-            .order_by(ReconciliationCase.created_at.desc())
-            .limit(1)
+            .execution_options(populate_existing=True)
+            .limit(2)
         )
-        return result.one_or_none()
+        cases = list(result)
+        if len(cases) > 1:
+            raise APIError(
+                "AMBIGUOUS_CASE_ID",
+                "This case ID exists in multiple runs. Use the run-scoped URL.",
+                status_code=409,
+                details={"case_id": case_id},
+            )
+        return cases[0] if cases else None
 
     async def list_cases(
         self,
         run_id: uuid.UUID,
         *,
         offset: int = 0,
-        limit: int = 50,
+        limit: int | None = 50,
         state: str | None = None,
         severity: str | None = None,
         exception_code: str | None = None,
@@ -88,7 +105,6 @@ class CaseRepository:
         max_amount_paise: int | None = None,
         ai_involvement: bool | None = None,
         human_review: bool | None = None,
-        min_age_days: int | None = None,
     ) -> tuple[list[ReconciliationCase], int]:
         conditions: list[Any] = [ReconciliationCase.reconciliation_run_id == run_id]
         if state:
@@ -107,22 +123,14 @@ class CaseRepository:
             conditions.append(ReconciliationCase.ai_assisted == ai_involvement)
         if human_review is not None:
             conditions.append(ReconciliationCase.human_reviewed == human_review)
-        if min_age_days is not None:
-            cutoff = datetime.now(UTC).date().toordinal() - min_age_days
-            cutoff_date = datetime.fromordinal(cutoff).replace(tzinfo=UTC)
-            conditions.append(ReconciliationCase.created_at <= cutoff_date)
-
         where = and_(*conditions)
         total = await self.session.scalar(
             select(func.count()).select_from(ReconciliationCase).where(where)
         )
-        result = await self.session.scalars(
-            select(ReconciliationCase)
-            .where(where)
-            .order_by(ReconciliationCase.case_id)
-            .offset(offset)
-            .limit(limit)
-        )
+        query = select(ReconciliationCase).where(where).order_by(ReconciliationCase.case_id)
+        if limit is not None:
+            query = query.offset(offset).limit(limit)
+        result = await self.session.scalars(query)
         return list(result), int(total or 0)
 
     async def update_case(self, case: ReconciliationCase, **values: Any) -> ReconciliationCase:

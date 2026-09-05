@@ -2,8 +2,10 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from services.ai_analyst.schemas import AIClientConfig
@@ -11,14 +13,26 @@ from services.ai_analyst.schemas import AIClientConfig
 _ROOT = Path(__file__).resolve().parents[3]
 
 
+class AuthToken(BaseModel):
+    """Configured identity; only a SHA-256 digest of a high-entropy bearer is stored."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    subject: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.@-]+$")
+    role: Literal["viewer", "operator", "reviewer", "admin"]
+    token_sha256: str = Field(pattern=r"^[a-f0-9]{64}$", repr=False)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_env: str = "development"
+    app_mode: Literal["local_demo", "shared"] = "shared"
+    auth_tokens: list[AuthToken] = Field(default_factory=list, repr=False)
     app_name: str = "clearledger"
     log_level: str = "INFO"
     utc_timezone: str = "UTC"
-    api_host: str = "0.0.0.0"
+    api_host: str = "127.0.0.1"
     api_port: int = 8000
     web_origin: str = "http://localhost:3000"
     database_url: str = "postgresql+psycopg://clearledger:clearledger@localhost:5432/clearledger"
@@ -30,7 +44,7 @@ class Settings(BaseSettings):
     ai_enabled: bool = False
     ai_provider: str = "none"
     ai_model: str = ""
-    ai_api_key: str | None = None
+    ai_api_key: SecretStr | None = None
     ai_base_url: str | None = None
     ai_timeout_seconds: int = Field(default=20, ge=1, le=120)
     ai_max_retries: int = Field(default=1, ge=0, le=1)
@@ -60,7 +74,7 @@ class Settings(BaseSettings):
 
     @field_validator("ai_api_key", mode="before")
     @classmethod
-    def normalize_ai_api_key(cls, value: str | None) -> str | None:
+    def normalize_ai_api_key(cls, value: str | SecretStr | None) -> str | SecretStr | None:
         """Convert empty string to None for better semantic representation."""
         if value is None or (isinstance(value, str) and not value.strip()):
             return None
@@ -70,6 +84,13 @@ class Settings(BaseSettings):
     def validate_required_configuration(self) -> "Settings":
         if not self.app_name.strip():
             raise ValueError("APP_NAME is required")
+        if len({item.token_sha256 for item in self.auth_tokens}) != len(self.auth_tokens):
+            raise ValueError("AUTH_TOKENS must not contain duplicate bearer digests")
+        if self.app_mode == "local_demo":
+            if urlsplit(self.web_origin).hostname not in {"localhost", "127.0.0.1", "::1"}:
+                raise ValueError("Local synthetic demo requires a loopback WEB_ORIGIN")
+            if self.allow_external_writes:
+                raise ValueError("Local synthetic demo cannot enable external financial writes")
         is_mock = self.ai_provider.strip().lower() in {"mock", "offline", "demo"}
         if self.ai_enabled and not self.ai_model.strip():
             if is_mock:
@@ -89,7 +110,7 @@ class Settings(BaseSettings):
             enabled=self.ai_enabled,
             provider=self.ai_provider,
             model=self.ai_model,
-            api_key=self.ai_api_key,
+            api_key=self.ai_api_key or SecretStr(""),
             base_url=self.ai_base_url,
             timeout_seconds=self.ai_timeout_seconds,
             max_retries=self.ai_max_retries,

@@ -10,10 +10,10 @@ restricted to bounded analysis of unresolved evidence and can never verify a cas
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.13+
 - Node.js 20+
 - pnpm 9+
-- Docker 24+ with Docker Compose v2
+- Docker 24+ with Docker Compose v2 (optional - can use Neon cloud DB)
 - `uv` 0.11+
 
 ### One-Command Setup
@@ -91,7 +91,11 @@ make test
 make verify-claims
 ```
 
-`make doctor` verifies prerequisites and checks whether Docker is available. `make test-unit` runs 114 pure offline unit, property, evaluator, and generator tests in seconds without requiring a database. `make test` runs full Python and frontend tests. `make verify-claims` regenerates all measured reports, verifies seed reproducibility, and fails if a published acceptance threshold is not met.
+`make doctor` verifies prerequisites and checks whether Docker is available. `make test-unit` runs
+the pure offline unit, property, evaluator, and generator suites without requiring a database.
+`make test` runs the full Python and frontend suites. `make verify-claims` disables optional live
+AI calls, regenerates all measured reports, verifies seed reproducibility, and fails if a
+published acceptance threshold is not met.
 
 ## What ClearLedger Does
 
@@ -132,6 +136,7 @@ Measured outputs are written to `out/`, including `evaluation.md`, `ablation_rep
 
 ## Submission Documents
 
+- [Hardening acceptance map — 5 September 2026](docs/HARDENING_2026-09-05.md)
 - [Detailed technical and product review — 5 September 2026](docs/REVIEW_2026-09-05.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Data dictionary](docs/DATA_DICTIONARY.md)

@@ -124,6 +124,7 @@ export default function CashPositionPage() {
   const columns: DataTableColumn<CaseSummary>[] = [
     {
       key: "case",
+      compact: true,
       label: "Case ID",
       sortValue: (item) => item.case_id,
       render: (item) => (
@@ -134,6 +135,7 @@ export default function CashPositionPage() {
     },
     {
       key: "state",
+      compact: true,
       label: "State",
       sortValue: (item) => item.case_state,
       render: (item) => <StatusBadge compact status={item.case_state} />,
@@ -146,9 +148,10 @@ export default function CashPositionPage() {
     },
     {
       key: "net",
-      label: "Controlled Amount",
-      sortValue: (item) => item.net_amount_paise,
-      render: (item) => <AmountDisplay className="font-bold" paise={item.net_amount_paise} />,
+      label: "Bucket contribution",
+      compact: true,
+      sortValue: (item) => item.cash_bucket_contribution_paise ?? 0,
+      render: (item) => item.cash_bucket_contribution_paise === undefined ? "Unavailable" : <span><AmountDisplay className="font-bold" paise={item.cash_bucket_contribution_paise} /><span className="block text-xs text-slate-500">{item.cash_contribution_basis ? titleCase(item.cash_contribution_basis) : ""}</span></span>,
     },
     {
       key: "settlement",
@@ -196,6 +199,7 @@ export default function CashPositionPage() {
             taxAuditQuery.refetch(),
           ]);
         }}
+        error={cashQuery.error ?? casesQuery.error}
         title="Cash position unavailable"
       />
     );
@@ -208,12 +212,13 @@ export default function CashPositionPage() {
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <p className="eyebrow mb-0">Cash position</p>
             <span className="inline-flex items-center gap-1.5 rounded-full bg-[#eff6ff] border border-[#bfdbfe] px-2.5 py-1 text-[0.6rem] font-bold text-[#0c44ac]">
-              <span className="status-dot bg-[#0c44ac]" /> Current snapshot
+              <span className="status-dot bg-[#0c44ac]" /> Recorded run snapshot
             </span>
           </div>
           <h1 className="page-title">Confidence-based cash control</h1>
+          <p className="text-xs text-slate-500">Source as of {cash.as_of_at ?? "unavailable"} · Execution {cash.execution_revision ?? "—"} / review {cash.review_revision ?? "—"}</p>
           <p className="page-subtitle">
-            Liquidity separated by evidence confidence, forward SLAs, and contributing economic cases.
+            Net batch receipts and settlement exposures, separated by source evidence. This is not the complete bank balance or spendable balance.
           </p>
         </div>
         <Link className="btn btn-secondary" href={`/runs/${runId}/cases`}>
@@ -230,7 +235,7 @@ export default function CashPositionPage() {
           <span className="absolute inset-y-0 left-0 w-1.5 bg-[#059669]" />
           <div className="flex items-center justify-between gap-3">
             <span className="flex items-center gap-2 text-[0.72rem] font-bold text-[#065f46]">
-              <ShieldCheck aria-hidden="true" size={16} /> Safe Cash Now
+              <ShieldCheck aria-hidden="true" size={16} /> Confirmed batch receipts
             </span>
             <ArrowRight aria-hidden="true" className="text-[#059669]" size={16} />
           </div>
@@ -239,13 +244,13 @@ export default function CashPositionPage() {
             paise={cash.bank_confirmed_paise}
           />
           <p className="mb-0 mt-2 text-[0.72rem] font-semibold text-[#047857]">
-            Equals verified Bank Confirmed cash
+            Verified net settlement receipts in this batch
           </p>
         </Link>
 
         <Link
           className="relative overflow-hidden rounded-[8px] border border-[#fde68a] bg-[#fffbeb] p-5 shadow-xs transition-[border-color,box-shadow,transform] hover:-translate-y-px hover:border-[#d97706]/60 hover:shadow-md"
-          href={`/runs/${runId}/cases?bucket=SETTLEMENT_CONFIRMED_IN_TRANSIT`}
+          href={`/runs/${runId}/cases?bucket=BANK_CONFIRMED,SETTLEMENT_CONFIRMED_IN_TRANSIT`}
         >
           <span className="absolute inset-y-0 left-0 w-1.5 bg-[#d97706]" />
           <div className="flex items-center justify-between gap-3">
@@ -265,7 +270,7 @@ export default function CashPositionPage() {
 
         <Link
           className="relative overflow-hidden rounded-[8px] border border-[#fecdd3] bg-[#fff1f2] p-5 shadow-xs transition-[border-color,box-shadow,transform] hover:-translate-y-px hover:border-[#e11d48]/60 hover:shadow-md md:col-span-2 xl:col-span-1"
-          href={`/runs/${runId}/cases?bucket=AT_RISK`}
+          href={`/runs/${runId}/cases?bucket=AT_RISK,UNRESOLVED`}
         >
           <span className="absolute inset-y-0 left-0 w-1.5 bg-[#e11d48]" />
           <div className="flex items-center justify-between gap-3">
@@ -293,14 +298,14 @@ export default function CashPositionPage() {
         />
       ) : forecastQuery.isLoading ? (
         <div className="skeleton h-72 w-full rounded-[8px]" />
-      ) : null}
+      ) : forecastQuery.error ? <ErrorState title="Forecast unavailable" message={forecastQuery.error.message} error={forecastQuery.error} onRetry={() => void forecastQuery.refetch()} /> : null}
 
-      {/* Tax-Line & ITC Audit Summary Card */}
+      {/* Recorded fee and tax policy consistency summary */}
       {taxAudit ? (
         <TaxAuditCard runId={runId} taxAudit={taxAudit} />
       ) : taxAuditQuery.isLoading ? (
         <div className="skeleton h-56 w-full rounded-[8px]" />
-      ) : null}
+      ) : taxAuditQuery.error ? <ErrorState title="Policy checks unavailable" message={taxAuditQuery.error.message} error={taxAuditQuery.error} onRetry={() => void taxAuditQuery.refetch()} /> : null}
 
       {/* Cash Confidence Buckets */}
       <section aria-labelledby="bucket-heading">
@@ -312,7 +317,7 @@ export default function CashPositionPage() {
             <p className="panel-copy">Select a bucket to inspect contributing cases</p>
           </div>
           <span className="inline-flex items-center gap-1.5 text-[0.68rem] font-semibold text-[#66736d]">
-            <RefreshCw aria-hidden="true" size={12} /> Updated after every decision
+            <RefreshCw aria-hidden="true" size={12} /> {cashQuery.isFetching || forecastQuery.isFetching ? "Refreshing derived records…" : `Snapshot retrieved ${new Date(cashQuery.dataUpdatedAt).toLocaleTimeString()}`}
           </span>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -325,6 +330,7 @@ export default function CashPositionPage() {
                 caseCount={snapshot?.case_ids.length ?? 0}
                 description={bucketConfig.description}
                 href={`/runs/${runId}/cash?bucket=${bucketConfig.key}`}
+                onClick={() => setSelectedForecastDay(null)}
                 key={bucketConfig.key}
                 label={bucketConfig.label}
                 selected={selectedBucket === bucketConfig.key && selectedForecastDay === null}
@@ -387,8 +393,8 @@ export default function CashPositionPage() {
         <aside className="panel self-start">
           <div className="panel-header">
             <div>
-              <h2 className="panel-title">Exposure deductions</h2>
-              <p className="panel-copy">Known obligations held outside safe cash</p>
+              <h2 className="panel-title">Recorded deductions</h2>
+              <p className="panel-copy">Components already reflected in settlement net</p>
             </div>
             <TriangleAlert aria-hidden="true" className="text-[#e11d48]" size={17} />
           </div>
@@ -413,7 +419,7 @@ export default function CashPositionPage() {
           </dl>
           <div className="border-t border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
             <div className="flex items-center justify-between gap-3 text-[0.75rem] font-bold text-[#0f172a]">
-              <span>Total known deductions</span>
+              <span>Total recorded deduction components</span>
               <AmountDisplay className="text-[#e11d48]" paise={totalDeductions} />
             </div>
           </div>

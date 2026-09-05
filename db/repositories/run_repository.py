@@ -20,7 +20,26 @@ class RunRepository(AsyncRepository[ReconciliationRun]):
 
     async def get_for_update(self, run_id: uuid.UUID) -> ReconciliationRun | None:
         result = await self.session.scalars(
-            select(ReconciliationRun).where(ReconciliationRun.id == run_id).with_for_update()
+            select(ReconciliationRun)
+            .where(ReconciliationRun.id == run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.one_or_none()
+
+    async def get_for_share(self, run_id: uuid.UUID) -> ReconciliationRun | None:
+        """Hold a shared run lock while reading one coherent derived projection."""
+        result = await self.session.scalars(
+            select(ReconciliationRun)
+            .where(ReconciliationRun.id == run_id)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+        return result.one_or_none()
+
+    async def get_child(self, parent_run_id: uuid.UUID) -> ReconciliationRun | None:
+        result = await self.session.scalars(
+            select(ReconciliationRun).where(ReconciliationRun.parent_run_id == parent_run_id)
         )
         return result.one_or_none()
 

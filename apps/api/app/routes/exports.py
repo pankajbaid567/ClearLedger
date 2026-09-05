@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import uuid
 from typing import Annotated, Any
 
@@ -12,14 +13,17 @@ from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.app.auth import principal_from_session
 from apps.api.app.config import Settings, get_settings
 from apps.api.app.dependencies import get_db_session
 from apps.api.app.idempotency import replay_response, store_response
 from apps.api.app.routes.helpers import require_run
 from apps.api.app.schemas.runs import EvaluationResponse
-from db.models import AuditEvent, ExceptionRecord, ReconciliationCase
+from db.models import AuditEvent, ExceptionRecord, RawSourceRow, ReconciliationCase, SourceFile
+from services.cash_position.service import cash_bucket_contribution
 from services.evaluation import evaluate_persisted_run
 from services.reconciliation.run_service import RunServiceError
+from services.reporting.control_package import build_control_package
 
 router = APIRouter(prefix="/api/runs", tags=["evaluation-and-exports"])
 IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
@@ -29,8 +33,10 @@ _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 def _safe_cell(value: Any) -> Any:
     if value is None:
         return ""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
     rendered = str(value)
-    return f"'{rendered}" if rendered.startswith(_FORMULA_PREFIXES) else rendered
+    return f"'{rendered}" if rendered.lstrip().startswith(_FORMULA_PREFIXES) else rendered
 
 
 def _csv_response(headers: list[str], rows: list[list[Any]], filename: str) -> Response:
@@ -52,6 +58,7 @@ async def evaluate_run(
     session: AsyncSession = Depends(get_db_session),
     config: Settings = Depends(get_settings),
 ) -> Any:
+    await require_run(session, run_id)
     scope = f"POST:/api/runs/{run_id}/evaluate"
     request_data = {"run_id": str(run_id)}
     replay = await replay_response(
@@ -59,7 +66,12 @@ async def evaluate_run(
     )
     if replay:
         return replay
-    evaluation = await evaluate_persisted_run(session, run_id, config.ground_truth_path)
+    evaluation = await evaluate_persisted_run(
+        session,
+        run_id,
+        config.ground_truth_path,
+        actor=principal_from_session(session).subject,
+    )
     response = EvaluationResponse.model_validate(evaluation)
     await store_response(
         session,
@@ -83,7 +95,9 @@ async def get_evaluation(
             status_code=404,
             details={"run_id": str(run_id)},
         )
-    return EvaluationResponse.model_validate(run.evaluation)
+    return EvaluationResponse.model_validate(
+        {**run.evaluation, "current_review_revision": run.review_revision}
+    )
 
 
 @router.get("/{run_id}/exports/evaluation.json")
@@ -161,6 +175,9 @@ async def export_reconciliation(
         "settlement_id",
         "bank_receipt_state",
         "human_reviewed",
+        "currency",
+        "cash_bucket_contribution_paise",
+        "cash_contribution_basis",
     ]
     rows = [
         [
@@ -173,6 +190,13 @@ async def export_reconciliation(
             case.settlement_id,
             case.bank_receipt_state,
             case.human_reviewed,
+            case.currency,
+            *cash_bucket_contribution(
+                case.cash_bucket,
+                case.net_amount_paise,
+                case.residual_paise,
+                case.gross_amount_paise,
+            ),
         ]
         for case in cases
     ]
@@ -184,9 +208,22 @@ async def export_exceptions(
     run_id: uuid.UUID, session: AsyncSession = Depends(get_db_session)
 ) -> Response:
     await require_run(session, run_id)
-    result = await session.scalars(
-        select(ExceptionRecord)
-        .where(ExceptionRecord.reconciliation_run_id == run_id)
+    result = await session.execute(
+        select(ExceptionRecord, ReconciliationCase)
+        .join(
+            ReconciliationCase,
+            (
+                (ReconciliationCase.case_id == ExceptionRecord.case_id)
+                & (
+                    ReconciliationCase.reconciliation_run_id
+                    == ExceptionRecord.reconciliation_run_id
+                )
+            ),
+        )
+        .where(
+            ExceptionRecord.reconciliation_run_id == run_id,
+            ReconciliationCase.case_state != "RECONCILED",
+        )
         .order_by(ExceptionRecord.case_id)
     )
     exceptions = list(result)
@@ -199,6 +236,11 @@ async def export_exceptions(
         "next_action",
         "owner_role",
         "ai_assisted",
+        "case_state",
+        "currency",
+        "cash_bucket",
+        "cash_bucket_contribution_paise",
+        "cash_contribution_basis",
     ]
     rows = [
         [
@@ -207,13 +249,52 @@ async def export_exceptions(
             item.severity,
             item.amount_at_risk_paise,
             item.summary,
-            item.next_action,
-            item.owner_role,
-            item.ai_assisted,
+            case.next_action or item.next_action,
+            case.owner_role or item.owner_role,
+            case.ai_assisted,
+            case.case_state,
+            case.currency,
+            case.cash_bucket,
+            *cash_bucket_contribution(
+                case.cash_bucket,
+                case.net_amount_paise,
+                case.residual_paise,
+                case.gross_amount_paise,
+            ),
         ]
-        for item in exceptions
+        for item, case in exceptions
     ]
     return _csv_response(headers, rows, f"exceptions-{run_id}.csv")
+
+
+@router.get("/{run_id}/exports/rejected-rows.csv")
+async def export_rejected_rows(
+    run_id: uuid.UUID, session: AsyncSession = Depends(get_db_session)
+) -> Response:
+    """One row per rejected source row, with full original data and all issues."""
+    await require_run(session, run_id)
+    records = await session.execute(
+        select(RawSourceRow, SourceFile)
+        .join(SourceFile, RawSourceRow.source_file_id == SourceFile.id)
+        .where(SourceFile.reconciliation_run_id == run_id, RawSourceRow.quality != "VALID")
+        .order_by(SourceFile.source_type, RawSourceRow.row_number)
+    )
+    rows = [
+        [
+            source.source_type,
+            source.filename,
+            row.row_number,
+            row.quality,
+            json.dumps(row.validation_errors or [], ensure_ascii=False),
+            json.dumps(row.raw_payload, ensure_ascii=False),
+        ]
+        for row, source in records
+    ]
+    return _csv_response(
+        ["source_type", "filename", "row_number", "quality", "issues_json", "raw_values_json"],
+        rows,
+        f"rejected-rows-{run_id}.csv",
+    )
 
 
 @router.get("/{run_id}/exports/audit.json")
@@ -244,3 +325,20 @@ async def export_audit(
         for item in result
     ]
     return JSONResponse({"run_id": str(run_id), "events": events})
+
+
+@router.get("/{run_id}/exports/control-package.json")
+async def export_control_package(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    config: Settings = Depends(get_settings),
+) -> JSONResponse:
+    run = await require_run(session, run_id)
+    package = await build_control_package(session, run, config.upload_dir)
+    return JSONResponse(
+        package,
+        headers={
+            "Content-Disposition": f'attachment; filename="control-package-{run_id}.json"',
+            "X-Control-Package-SHA256": package["sha256"],
+        },
+    )

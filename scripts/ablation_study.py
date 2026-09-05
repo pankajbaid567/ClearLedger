@@ -105,7 +105,8 @@ def main() -> None:
         6,
     )
     ai_row["ai_calls"] = ai_metrics["calls"]
-    ai_row["ai_cost_usd"] = ai_metrics["estimated_cost"] / 1_000_000.0  # Convert micro-dollars to USD
+    # Persistence stores micro-dollars so aggregation remains exact.
+    ai_row["ai_cost_usd"] = ai_metrics["estimated_cost"] / 1_000_000.0
     ai_row["ai_assisted_cases"] = ai_metrics["assisted_cases"]
     ai_row["ai_status"] = ai_metrics["status"]
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from evaluator.metrics import (
     case_state_accuracy,
     cash_bucket_accuracy,
@@ -17,7 +20,7 @@ from evaluator.metrics import (
     stp_rate,
     unexplained_residual_paise,
 )
-from evaluator.schemas import PredictedCase, PredictedEdge
+from evaluator.schemas import PredictedCase, PredictedEdge, PredictionReport
 from generator.ground_truth import GroundTruthCase, GroundTruthEdge
 from packages.domain.enums import CaseState, CashBucket, ExceptionCode
 
@@ -150,11 +153,48 @@ class TestWrongPrediction:
         ]
         assert case_state_accuracy(pred, truth) == 0.5
 
+    def test_wrong_allocation_is_not_a_correct_relationship(self):
+        truth = [_make_truth("C1", CaseState.RECONCILED, EDGES_A)]
+        wrong_amount = [("ORD_1", "PAY_1", "order_payment", 99999)]
+        pred = [_make_pred("C1", CaseState.RECONCILED, wrong_amount)]
+
+        metrics = compute_all_metrics(pred, truth)
+
+        assert metrics["relationship_precision"] == 0.0
+        assert metrics["relationship_recall"] == 0.0
+        assert metrics["relationship_topology_true_positive_count"] == 1
+        assert metrics["false_positive_count"] == 1
+        assert metrics["monetary_reconciliation_rate"] == 0.0
+
+    def test_unknown_reconciled_case_is_a_false_positive(self):
+        truth = [_make_truth("C1", CaseState.RECONCILED)]
+        pred = [_make_pred("UNKNOWN", CaseState.RECONCILED)]
+
+        assert false_positive_count(pred, truth) == 1
+        assert false_positive_amount_paise(pred, truth) == 100000
+
+    def test_duplicate_case_ids_are_rejected_by_report(self):
+        case = _make_pred("C1", CaseState.RECONCILED)
+
+        with pytest.raises(ValidationError, match="duplicate case IDs"):
+            PredictionReport(
+                dataset_id="dataset",
+                run_id="run",
+                duration_seconds=1.0,
+                total_source_records=1,
+                cases=[case, case],
+            )
+
 
 # ── Missing prediction tests ──────────────────────────────────────────────
 
 
 class TestMissingPrediction:
+    def test_empty_predictions_do_not_claim_precision_when_truth_has_edges(self):
+        truth = [_make_truth("C1", CaseState.RECONCILED, EDGES_A)]
+
+        assert relationship_precision([], truth) == 0.0
+
     def test_recall_drops_when_edges_missing(self):
         truth = [_make_truth("C1", CaseState.RECONCILED, EDGES_A + EDGES_B)]
         pred = [_make_pred("C1", CaseState.RECONCILED, EDGES_A)]  # missing EDGES_B

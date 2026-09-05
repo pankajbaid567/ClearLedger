@@ -85,10 +85,9 @@ def test_cash_position_buckets_sum_to_case_contributions() -> None:
     )
     assert len(result.cash_position.buckets[CashBucket.AT_RISK].case_ids) == 8
     assert len(result.cash_position.buckets[CashBucket.UNRESOLVED].case_ids) == 7
-    assert result.cash_position.safe_cash_paise == (
-        result.cash_position.bank_confirmed_paise
-        + result.cash_position.settlement_confirmed_in_transit_paise
-        - result.cash_position.scheduled_refunds_paise
-        - result.cash_position.known_disputes_paise
-        - result.cash_position.known_reserve_holds_paise
+    # Safe cash is the bank-confirmed net batch movement. Settlement components
+    # and deductions are already reflected in those net amounts.
+    assert (
+        result.cash_position.safe_cash_paise
+        == result.cash_position.bank_confirmed_paise
     )

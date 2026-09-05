@@ -14,6 +14,7 @@
 *.crt
 secrets.yaml
 credentials.json
+*.bearer-token
 
 # Python
 # ============================================

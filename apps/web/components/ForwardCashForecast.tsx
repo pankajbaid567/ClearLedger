@@ -57,12 +57,15 @@ export function ForwardCashForecast({
           <div className="mb-1 flex items-center gap-2">
             <span className="eyebrow mb-0 text-[#0c44ac]">Liquidity Projection</span>
             <span className="inline-flex items-center gap-1 rounded-full bg-[#ecfdf5] border border-[#a7f3d0] px-2 py-0.5 text-[0.62rem] font-bold text-[#065f46]">
-              <CheckCircle2 size={11} /> T+0 to T+7 Horizon
+              <CheckCircle2 size={11} /> T+0 to T+7 schedule
             </span>
           </div>
           <h2 className="panel-title text-[1.05rem] font-bold">Forward Cash Forecast</h2>
           <p className="panel-copy">
-            Deterministic daily inflow timeline modeled from settlement SLAs and banking calendars.
+            As of {forecast.as_of_date}. Expected batch inflows under the configured settlement policy; excludes operating expenses and unmodeled cash flows.
+          </p>
+          <p className="mb-0 mt-1 text-[0.66rem] text-[#64748b]">
+            Computation version: execution {forecast.execution_revision}, review {forecast.review_revision}
           </p>
         </div>
 
@@ -95,7 +98,7 @@ export function ForwardCashForecast({
           <div className="flex items-center gap-2 rounded-[6px] border border-[#a7f3d0] bg-[#ecfdf5] px-3 py-1.5 text-right">
             <div>
               <p className="m-0 text-[0.62rem] font-bold uppercase tracking-wider text-[#065f46]">
-                7-Day Projected Inflow
+                Projected inflows through T+7
               </p>
               <AmountDisplay
                 className="text-[0.92rem] font-extrabold text-[#059669]"
@@ -106,6 +109,7 @@ export function ForwardCashForecast({
         </div>
       </div>
 
+      <p className="m-0 border-b px-4 py-3 text-xs text-slate-600">Overdue expected receipts: {formatPaise(forecast.overdue_inflow_paise)} · Receipts without a reliable date: {formatPaise(forecast.undated_inflow_paise)}. These amounts remain separately disclosed.</p>
       {/* Day Selector Ribbon */}
       <div className="flex items-center gap-1.5 overflow-x-auto border-b border-[#e2e8f0] bg-[#f8fafc] p-2.5">
         <button
@@ -188,7 +192,7 @@ export function ForwardCashForecast({
                             {item.label} · <span className="font-mono text-[#64748b]">{item.date}</span>
                           </p>
                           <p className="mb-2 text-[0.66rem] font-semibold text-[#64748b]">
-                            {item.isBankingDay ? "✓ RBI Banking Day" : "⚠ Weekend / Bank Holiday"}
+                            {item.isBankingDay ? "✓ Policy banking day" : "⚠ Weekend / Bank Holiday"}
                           </p>
                           <div className="space-y-1 divide-y divide-[#f1f5f9]">
                             <div className="flex items-center justify-between gap-4 pt-1">
@@ -198,7 +202,7 @@ export function ForwardCashForecast({
                               </strong>
                             </div>
                             <div className="flex items-center justify-between gap-4 pt-1">
-                              <span className="text-[#64748b]">Closing Safe Cash:</span>
+                              <span className="text-[#64748b]">Projected batch receipts:</span>
                               <strong className="text-[#0c44ac]">
                                 {formatPaise(item.closingPaise)}
                               </strong>
@@ -327,8 +331,7 @@ export function ForwardCashForecast({
         <div className="mt-4 flex items-center gap-2 rounded-[6px] border border-[#e2e8f0] bg-[#f8fafc] p-2.5 text-[0.68rem] text-[#475569]">
           <Clock aria-hidden="true" className="shrink-0 text-[#0c44ac]" size={14} />
           <span>
-            <strong>Settlement SLA Awareness:</strong> Inflows reflect Razorpay T+1/T+2 settlement
-            cycles with automated rollover across RBI banking holidays and Sundays.
+            <strong>Settlement policy:</strong> Inflows follow the run’s configured settlement dates and holiday calendar. Expected receipts are projections, not confirmed bank cash.
           </span>
         </div>
       </div>

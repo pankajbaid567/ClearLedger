@@ -11,7 +11,8 @@ from packages.domain.enums import FollowUpTaskType
 
 
 class ReviewActionRequest(BaseModel):
-    actor: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="demo.finance.operator", min_length=1, max_length=200)
+    expected_review_revision: int = Field(ge=0)
     reason: str | None = Field(default=None, max_length=1000)
     note: str | None = Field(default=None, max_length=4000)
 
@@ -25,7 +26,8 @@ class AssignRequest(ReviewActionRequest):
 
 
 class TaskCreateRequest(BaseModel):
-    actor: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="demo.finance.operator", min_length=1, max_length=200)
+    expected_review_revision: int = Field(ge=0)
     task_type: FollowUpTaskType
     amount_at_risk_paise: int = Field(default=0, ge=0)
     required_evidence: str | None = Field(default=None, max_length=2000)
@@ -34,6 +36,9 @@ class TaskCreateRequest(BaseModel):
 
 
 class ReviewActionResponse(BaseModel):
+    run_id: uuid.UUID
+    execution_revision: int = 1
+    review_revision: int = 0
     case_id: str
     action: str
     previous_state: str
@@ -45,6 +50,7 @@ class ReviewActionResponse(BaseModel):
 
 class TaskResponse(BaseModel):
     id: uuid.UUID
+    reconciliation_run_id: uuid.UUID
     case_id: str
     task_type: str
     amount_at_risk_paise: int

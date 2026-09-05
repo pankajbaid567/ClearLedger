@@ -85,7 +85,9 @@ async def main():
 
         async def approve(cid):
             async with factory() as s:
-                await ReviewService(s).approve(cid, actor="reviewer")
+                await ReviewService(s, expected_review_revision=0).approve(
+                    cid, actor="reviewer"
+                )
                 await s.commit()
 
         with patch.object(CaseRepository, "cash_position", barrier):

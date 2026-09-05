@@ -129,6 +129,7 @@ export default function AuditPage() {
             auditQuery.refetch(),
           ]);
         }}
+        error={runQuery.error ?? metricsQuery.error ?? auditQuery.error}
         title="Audit view unavailable"
       />
     );
@@ -215,6 +216,7 @@ export default function AuditPage() {
         </div>
       </section>
 
+      {evaluationQuery.error ? <ErrorState title="Evaluation unavailable" message={evaluationQuery.error.message} error={evaluationQuery.error} onRetry={() => void evaluationQuery.refetch()} /> : null}
       <section aria-labelledby="evaluation-summary-heading">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
@@ -237,7 +239,7 @@ export default function AuditPage() {
                 : "Ground-truth evaluation"
             }
             label="Precision"
-            value={formatPercent(metricNumber(aggregate.relationship_precision))}
+            value={evaluation && typeof aggregate.relationship_precision === "number" ? formatPercent(aggregate.relationship_precision) : "Not evaluated"}
             tone="verified"
           />
           <MetricCard
@@ -247,30 +249,30 @@ export default function AuditPage() {
                 : "Ground-truth evaluation"
             }
             label="Recall"
-            value={formatPercent(metricNumber(aggregate.relationship_recall))}
+            value={evaluation && typeof aggregate.relationship_recall === "number" ? formatPercent(aggregate.relationship_recall) : "Not evaluated"}
             tone="verified"
           />
           <MetricCard
             detail="Harmonic mean of precision and recall"
             label="F1 Score"
-            value={formatPercent(metricNumber(aggregate.relationship_f1))}
+            value={evaluation && typeof aggregate.relationship_f1 === "number" ? formatPercent(aggregate.relationship_f1) : "Not evaluated"}
             tone="verified"
           />
           <MetricCard
             detail={`${formatInteger(metricNumber(aggregate.stp_reconciled_case_count))} / ${formatInteger(totalEvaluatedCases)} auto-reconciled cases`}
             label="STP Rate"
-            value={formatPercent(metricNumber(aggregate.stp_rate))}
+            value={evaluation && typeof aggregate.stp_rate === "number" ? formatPercent(aggregate.stp_rate) : "Not evaluated"}
           />
           <MetricCard
             detail={`${formatPaise(metricNumber(aggregate.reconciled_gross_amount_paise))} / ${formatPaise(metricNumber(aggregate.total_gross_amount_paise))} gross value`}
             label="Monetary Reconciliation"
-            value={formatPercent(metricNumber(aggregate.monetary_reconciliation_rate))}
+            value={evaluation && typeof aggregate.monetary_reconciliation_rate === "number" ? formatPercent(aggregate.monetary_reconciliation_rate) : "Not evaluated"}
           />
           <MetricCard
             detail={`${formatPaise(metricNumber(aggregate.false_positive_amount_paise))} across ${formatInteger(totalEvaluatedCases)} evaluated cases`}
             label="False Positives"
             tone={metricNumber(aggregate.false_positive_count) ? "risk" : "verified"}
-            value={formatInteger(metricNumber(aggregate.false_positive_count))}
+            value={evaluation && typeof aggregate.false_positive_count === "number" ? formatInteger(aggregate.false_positive_count) : "Not evaluated"}
           />
         </div>
       </section>

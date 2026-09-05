@@ -10,7 +10,10 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "pretest:e2e": "pnpm build:e2e",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "build:contract": "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:18101/api NEXT_DIST_DIR=.next-playwright next build",
+    "pretest:contract": "pnpm build:contract",
+    "test:contract": "playwright test --config playwright.contract.config.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.102.8",

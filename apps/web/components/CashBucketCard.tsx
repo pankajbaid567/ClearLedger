@@ -39,6 +39,7 @@ export function CashBucketCard({
   caseCount,
   href,
   selected = false,
+  onClick,
 }: {
   bucket: keyof typeof bucketConfig;
   label: string;
@@ -47,11 +48,12 @@ export function CashBucketCard({
   caseCount: number;
   href: string;
   selected?: boolean;
+  onClick?: () => void;
 }) {
   const config = bucketConfig[bucket];
   const Icon = config.icon;
   return (
-    <Link
+    <Link onClick={onClick}
       aria-current={selected ? "true" : undefined}
       className={`group relative block min-h-[176px] overflow-hidden rounded-[9px] border bg-white p-4 shadow-xs transition-all duration-200 hover:-translate-y-0.5 hover:border-[#0c44ac]/40 hover:shadow-[0_10px_25px_-5px_rgba(12,68,172,0.1)] ${
         selected ? "border-[#0c44ac] ring-2 ring-[#0c44ac]/20 shadow-[0_4px_14px_rgba(12,68,172,0.12)]" : "border-[#e2e8f0]"

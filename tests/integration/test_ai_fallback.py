@@ -294,7 +294,11 @@ async def test_valid_ai_candidate_is_reverified_and_only_suggested(
         assert run.metrics["ai"]["prompt_tokens"] == 300
         assert run.metrics["ai"]["estimated_cost"] == 3000  # 3000 micro-dollars = $0.003
 
-        review_service = ReviewService(session)
+        review_service = ReviewService(
+            session,
+            run_id=run.id,
+            expected_review_revision=run.review_revision,
+        )
         decision, invariant_passed = await review_service.approve(
             case.case_id,
             actor="finance.reviewer@example.test",

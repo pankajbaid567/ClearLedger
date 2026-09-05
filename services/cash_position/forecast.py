@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from packages.domain.enums import CashBucket
-from services.normalization.dates import is_business_day
+from services.normalization.dates import is_business_day, next_business_day
 from services.normalization.policy import SettlementPolicy
 from services.reconciliation.models import ReconciliationCase
 
@@ -26,7 +26,8 @@ class CashForecastDay(BaseModel):
     expected_inflow_paise: int
     scheduled_deductions_paise: int
     closing_cash_paise: int
-    confidence_score: float
+    confidence_score: float | None = None
+    confidence_basis: str = "SCHEDULE_ONLY_NOT_CALIBRATED"
     case_count: int
     case_ids: list[str] = Field(default_factory=list)
     settlement_ids: list[str] = Field(default_factory=list)
@@ -44,6 +45,9 @@ class CashForecastResponse(BaseModel):
     total_projected_inflow_paise: int
     baseline_safe_cash_paise: int
     projected_final_cash_paise: int
+    forecast_scope: str = "SETTLEMENT_RECEIPTS_ONLY"
+    overdue_inflow_paise: int = 0
+    undated_inflow_paise: int = 0
 
 
 def _extract_settlement_date(case: ReconciliationCase) -> tuple[date | None, str | None]:
@@ -112,7 +116,7 @@ def calculate_cash_forecast(
     # Items: (date, settlement_id, amount, case_id)
     in_transit_events: list[tuple[date, str, int, str]] = []
     bank_confirmed_paise = 0
-    scheduled_deductions = 0
+    undated_inflow = 0
 
     for c in cases:
         if isinstance(c, ReconciliationCase):
@@ -128,13 +132,8 @@ def calculate_cash_forecast(
                 s_date, s_id = _extract_settlement_date(c)
                 if s_date is not None:
                     in_transit_events.append((s_date, s_id or "", net_paise, case_id))
-            for r in c.records:
-                if r.source_type == "settlement_components" and r.component_type in {
-                    "REFUND",
-                    "CHARGEBACK",
-                    "RESERVE_HOLD",
-                }:
-                    scheduled_deductions += abs(r.amount_paise or 0)
+                else:
+                    undated_inflow += net_paise
         elif isinstance(c, dict):
             bucket_str = c.get("cash_bucket", "")
             net_paise = c.get("net_amount_paise", 0)
@@ -145,13 +144,11 @@ def calculate_cash_forecast(
                 s_date, s_id, _, _ = _extract_case_from_dict(c)
                 if s_date is not None:
                     in_transit_events.append((s_date, s_id or "", net_paise, case_id))
+                else:
+                    undated_inflow += net_paise
 
     # Baseline safe cash starting liquidity
-    baseline_cash = (
-        safe_cash_paise
-        if safe_cash_paise is not None
-        else max(0, bank_confirmed_paise - scheduled_deductions)
-    )
+    baseline_cash = safe_cash_paise if safe_cash_paise is not None else bank_confirmed_paise
 
     # 2. Determine anchor date (T+0)
     anchor: date
@@ -162,11 +159,16 @@ def calculate_cash_forecast(
             anchor = as_of_date.date()
         else:
             anchor = as_of_date
-    elif in_transit_events:
-        # Default to the earliest pending in-transit settlement date to show full pipeline
-        anchor = min(item[0] for item in in_transit_events)
     else:
         anchor = date.today()
+
+    # Apply the recorded banking calendar. Overdue receipts remain visible as
+    # overdue; they are not invented as future inflows on a guessed new date.
+    in_transit_events = [
+        (next_business_day(d, holidays, weekend_days), sid, amount, cid)
+        for d, sid, amount, cid in in_transit_events
+    ]
+    overdue_inflow = sum(amount for d, _, amount, _ in in_transit_events if d < anchor)
 
     # 3. Project 8 calendar days (T+0 to T+7)
     days: list[CashForecastDay] = []
@@ -189,17 +191,7 @@ def calculate_cash_forecast(
         running_cash = closing
         total_inflow += day_inflow
 
-        # Confidence: 1.0 for T+0, 0.95 for banking day with confirmed UTR/SLA
-        if day_offset == 0:
-            confidence = 1.0
-        elif is_banking and matching:
-            confidence = 0.95
-        elif is_banking:
-            confidence = 0.85
-        else:
-            confidence = 0.70
-
-        label = "T+0 (Today)" if day_offset == 0 else f"T+{day_offset}"
+        label = "T+0 (As of)" if day_offset == 0 else f"T+{day_offset}"
         days.append(
             CashForecastDay(
                 day_offset=day_offset,
@@ -210,7 +202,7 @@ def calculate_cash_forecast(
                 expected_inflow_paise=day_inflow,
                 scheduled_deductions_paise=day_deductions,
                 closing_cash_paise=closing,
-                confidence_score=confidence,
+                confidence_score=None,
                 case_count=len(matching),
                 case_ids=day_case_ids,
                 settlement_ids=day_settlement_ids,
@@ -225,4 +217,6 @@ def calculate_cash_forecast(
         total_projected_inflow_paise=total_inflow,
         baseline_safe_cash_paise=baseline_cash,
         projected_final_cash_paise=running_cash,
+        overdue_inflow_paise=overdue_inflow,
+        undated_inflow_paise=undated_inflow,
     )

@@ -16,14 +16,15 @@ import json
 import sys
 from pathlib import Path
 
-from evaluator.metrics import compute_all_metrics, compute_scenario_breakdown
+from evaluator.metrics import Metrics, compute_all_metrics, compute_scenario_breakdown
 from evaluator.schemas import PredictionReport
+from evaluator.validation import validate_evaluation_inputs
 from generator.ground_truth import GroundTruthManifest
 
 _ROOT = Path(__file__).resolve().parent.parent
 
 
-def _format_markdown(metrics: dict, breakdown: dict[str, dict]) -> str:
+def _format_markdown(metrics: Metrics, breakdown: dict[str, Metrics]) -> str:
     lines = [
         "# ClearLedger — Evaluation Results",
         "",
@@ -125,6 +126,29 @@ def main(argv: list[str] | None = None) -> None:
     pred_report = PredictionReport.model_validate_json(pred_path.read_text())
     predicted = pred_report.cases
 
+    try:
+        validate_evaluation_inputs(pred_report, gt_manifest)
+        if args.manifest:
+            public_manifest = json.loads(Path(args.manifest).read_text())
+            comparable_fields = (
+                "dataset_id",
+                "total_cases",
+                "total_source_records",
+                "file_checksums",
+            )
+            mismatches = [
+                field
+                for field in comparable_fields
+                if public_manifest.get(field) != getattr(gt_manifest, field)
+            ]
+            if mismatches:
+                raise ValueError(
+                    "public manifest differs from ground truth for: " + ", ".join(mismatches)
+                )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"ERROR: Invalid evaluation inputs: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     # Compute metrics
     metrics = compute_all_metrics(
         predicted,
@@ -161,9 +185,16 @@ def main(argv: list[str] | None = None) -> None:
     print(f"  Output MD:   {out_md_path}")
 
     # Safety gate
-    fp = metrics["false_positive_count"]
-    if fp > 0:
-        print(f"\n⚠️  SAFETY FAILURE: {fp} false positive(s) detected!", file=sys.stderr)
+    fp = int(metrics["false_positive_count"] or 0)
+    missing = int(metrics["missing_case_count"] or 0)
+    residual = int(metrics["unexplained_residual_paise"] or 0)
+    if fp > 0 or missing > 0 or residual > 0:
+        print(
+            "\n⚠️  SAFETY FAILURE: "
+            f"false_positives={fp}, missing_cases={missing}, "
+            f"unexplained_residual_paise={residual}",
+            file=sys.stderr,
+        )
         sys.exit(2)
 
     print("\n✅ All safety checks passed.")

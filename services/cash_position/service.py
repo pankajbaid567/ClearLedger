@@ -17,18 +17,30 @@ from services.reconciliation.evidence import EvidenceGraph
 from services.reconciliation.models import CashPosition, CashPositionBucket, ReconciliationCase
 
 
-def _case_amount(case: ReconciliationCase) -> int:
-    if case.cash_bucket in {
+def cash_bucket_contribution(
+    bucket: CashBucket | str | None,
+    net_amount_paise: int,
+    residual_paise: int,
+    gross_amount_paise: int,
+) -> tuple[int, str]:
+    """The single definition used by aggregates, row drilldowns and exports."""
+    if bucket in {
         CashBucket.BANK_CONFIRMED,
         CashBucket.SETTLEMENT_CONFIRMED_IN_TRANSIT,
         CashBucket.EXPECTED_SETTLEMENT,
     }:
-        return case.net_amount_paise
-    if case.residual_paise:
-        return abs(case.residual_paise)
-    if case.net_amount_paise:
-        return abs(case.net_amount_paise)
-    return abs(case.gross_amount_paise)
+        return net_amount_paise, "NET_SETTLEMENT"
+    if residual_paise:
+        return abs(residual_paise), "ABSOLUTE_RESIDUAL"
+    if net_amount_paise:
+        return abs(net_amount_paise), "ABSOLUTE_NET_EXPOSURE"
+    return abs(gross_amount_paise), "ABSOLUTE_GROSS_EXPOSURE"
+
+
+def _case_amount(case: ReconciliationCase) -> int:
+    return cash_bucket_contribution(
+        case.cash_bucket, case.net_amount_paise, case.residual_paise, case.gross_amount_paise
+    )[0]
 
 
 def _component_total(cases: list[ReconciliationCase], component_type: ComponentType) -> int:
@@ -67,16 +79,11 @@ def calculate_cash_position(
     known_disputes = _component_total(cases, ComponentType.CHARGEBACK)
     reserve_holds = _component_total(cases, ComponentType.RESERVE_HOLD)
     bank_confirmed = bucket_amounts[CashBucket.BANK_CONFIRMED].amount_paise
-    settlement_in_transit = bucket_amounts[
-        CashBucket.SETTLEMENT_CONFIRMED_IN_TRANSIT
-    ].amount_paise
-    safe_cash = (
-        bank_confirmed
-        + settlement_in_transit
-        - scheduled_refunds
-        - known_disputes
-        - reserve_holds
-    )
+    settlement_in_transit = bucket_amounts[CashBucket.SETTLEMENT_CONFIRMED_IN_TRANSIT].amount_paise
+    # Components have already been applied to settlement net. They are recorded
+    # deductions, not new future obligations. Transit is not available bank cash.
+    # This is confirmed net movement in this batch, not a whole-account balance.
+    safe_cash = bank_confirmed
     return CashPosition(
         buckets=bucket_amounts,
         bank_confirmed_paise=bank_confirmed,
@@ -98,5 +105,6 @@ __all__ = [
     "TaxDiscrepancyItem",
     "calculate_cash_forecast",
     "calculate_cash_position",
+    "cash_bucket_contribution",
     "calculate_tax_audit",
 ]

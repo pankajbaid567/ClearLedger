@@ -31,9 +31,12 @@ def test_cash_forecast_generates_eight_day_timeline() -> None:
         safe_cash_paise=result.cash_position.safe_cash_paise,
     )
     assert len(forecast.days) == 8
-    assert forecast.days[0].label == "T+0 (Today)"
+    assert forecast.days[0].label == "T+0 (As of)"
     assert forecast.days[1].label == "T+1"
     assert forecast.days[7].label == "T+7"
+    assert forecast.forecast_scope == "SETTLEMENT_RECEIPTS_ONLY"
+    assert all(day.confidence_score is None for day in forecast.days)
+    assert all(day.confidence_basis == "SCHEDULE_ONLY_NOT_CALIBRATED" for day in forecast.days)
 
 
 def test_cash_forecast_exact_integer_balance_invariant() -> None:

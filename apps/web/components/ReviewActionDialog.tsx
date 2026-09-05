@@ -5,8 +5,10 @@ import { addDays, format } from "date-fns";
 import { CalendarClock, CheckCircle2, UserRound, X, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { APIError, submitReview, type ReviewAction } from "@/lib/api";
+import { APIError, getRun, submitReview, type ReviewAction } from "@/lib/api";
 import { titleCase } from "@/lib/format";
+import { useIdentity } from "./AccessBoundary";
+import { useDialogFocus } from "@/lib/useDialogFocus";
 
 const actions: { value: ReviewAction; label: string; icon: typeof CheckCircle2 }[] = [
   { value: "approve", label: "Approve", icon: CheckCircle2 },
@@ -37,6 +39,7 @@ export function ReviewActionDialog({
   onComplete?: (message: string) => void;
 }) {
   const queryClient = useQueryClient();
+  const identity = useIdentity();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [action, setAction] = useState<ReviewAction>(initialAction);
   const [reason, setReason] = useState("");
@@ -46,44 +49,41 @@ export function ReviewActionDialog({
 
   useEffect(() => {
     setAction(initialAction === "approve" && !canApprove ? "assign" : initialAction);
-  }, [canApprove, initialAction, open]);
-  useEffect(() => {
-    if (!open) return;
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handleKey);
-    document.body.style.overflow = "hidden";
-    window.setTimeout(() => dialogRef.current?.focus(), 0);
-    return () => {
-      document.removeEventListener("keydown", handleKey);
-      document.body.style.overflow = "";
-    };
-  }, [onClose, open]);
+    setReason(""); setNote(""); setOwner("settlement_operations");
+    setUntil(format(addDays(new Date(), 3), "yyyy-MM-dd"));
+  }, [canApprove, initialAction, open, caseId]);
+  useDialogFocus(dialogRef, open, onClose);
 
   const mutation = useMutation({
-    mutationFn: () =>
-      submitReview(caseId, action, {
+    mutationFn: async () => {
+      const currentRun = await queryClient.fetchQuery({
+        queryKey: ["run", runId],
+        queryFn: () => getRun(runId),
+        staleTime: 0,
+      });
+      return submitReview(runId, caseId, action, {
+        expected_review_revision: currentRun.review_revision,
         reason: reason || undefined,
         note: note || undefined,
         ...(action === "defer" ? { until } : {}),
         ...(action === "assign" ? { owner_role: owner } : {}),
-      }),
+      });
+    },
     onSettled: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["cases", runId] }),
-        queryClient.invalidateQueries({ queryKey: ["case", caseId] }),
+        queryClient.invalidateQueries({ queryKey: ["case", runId, caseId] }),
         queryClient.invalidateQueries({ queryKey: ["cash", runId] }),
-        queryClient.invalidateQueries({ queryKey: ["audit", runId] }),
+        ...["audit", "run", "metrics", "evaluation", "cash-forecast", "tax-audit", "receipt", "evidence", "candidates", "ai-analysis", "tasks"].map((key) => queryClient.invalidateQueries({ queryKey: [key, runId] })),
       ]);
     },
     onSuccess: (result) => {
-      queryClient.setQueryData(["case", caseId], (current: unknown) => {
+      queryClient.setQueryData(["case", runId, caseId], (current: unknown) => {
         if (!current || typeof current !== "object") return current;
         return {
           ...current,
           case_state: result.new_state,
-          human_reviewed: true,
+          human_reviewed: result.human_reviewed,
         };
       });
       queryClient.setQueryData(["cases", runId], (current: unknown) => {
@@ -113,11 +113,14 @@ export function ReviewActionDialog({
       aria-modal="true"
       className="fixed inset-0 z-[80] flex items-center justify-center bg-[#0b1712]/60 p-4 backdrop-blur-[2px]"
       data-testid="review-dialog"
-      role="dialog"
+
     >
       <div
         className="w-full max-w-[540px] overflow-hidden rounded-[8px] border border-[#cbd5d0] bg-white shadow-[0_24px_70px_rgba(10,25,19,0.28)] outline-none"
         ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="review-dialog-title"
         tabIndex={-1}
       >
         <div className="flex items-start justify-between gap-4 border-b border-[#dbe3df] bg-[#fbfcfb] px-5 py-4">
@@ -126,7 +129,7 @@ export function ReviewActionDialog({
             <h2 className="m-0 text-base font-bold" id="review-dialog-title">Record human decision</h2>
             <p className="mb-0 mt-1 font-mono text-[0.69rem] text-[#6e7a75]">{caseId}</p>
             <p className="mb-0 mt-2 inline-flex items-center gap-1.5 rounded-full bg-[#edf1ef] px-2 py-1 text-[0.62rem] font-bold text-[#637169]">
-              <UserRound aria-hidden="true" size={11} /> demo.finance.operator
+              <UserRound aria-hidden="true" size={11} /> {identity?.subject ?? "Authenticated operator"}
             </p>
           </div>
           <button aria-label="Close review dialog" className="btn btn-ghost btn-icon" onClick={onClose}>
@@ -230,7 +233,7 @@ export function ReviewActionDialog({
 
           {error ? (
             <p className="rounded-[5px] border border-[#edb9b6] bg-[#fdeceb] px-3 py-2 text-[0.72rem] leading-5 text-[#9d302c]">
-              {error instanceof APIError ? error.message : "The decision could not be recorded."}
+              {error instanceof APIError ? `${error.message}${error.requestId ? ` · Request ${error.requestId}` : ""}${error.status === 409 ? " Refresh the case before trying again." : ""}` : "The decision could not be recorded."}
             </p>
           ) : null}
 

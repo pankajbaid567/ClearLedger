@@ -4,6 +4,7 @@ import { AmountDisplay } from "./AmountDisplay";
 
 export type EquationLine = {
   label: string;
+  id?: string;
   amountPaise: number;
   sign?: "credit" | "debit" | "neutral";
   passed?: boolean;
@@ -13,26 +14,28 @@ export function EquationCard({
   lines,
   netSettlementPaise,
   bankCreditPaise,
+  bankVerified = false,
   residualPaise,
 }: {
   lines: EquationLine[];
   netSettlementPaise: number;
-  bankCreditPaise: number;
+  bankCreditPaise: number | null;
+  bankVerified?: boolean;
   residualPaise: number;
 }) {
   const residualPassed = residualPaise === 0;
   return (
     <section className="rounded-[8px] border border-[#e2e8f0] bg-white shadow-xs overflow-hidden" data-testid="equation-card">
       <div className="border-b border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
-        <h3 className="m-0 text-[0.85rem] font-bold text-[#0f172a]">Settlement Equation</h3>
+        <h3 className="m-0 text-[0.85rem] font-bold text-[#0f172a]">Settlement equation</h3>
         <p className="mb-0 mt-1 text-[0.7rem] text-[#64748b]">
           Component arithmetic compared with observed bank credit.
         </p>
       </div>
       <div className="p-4 font-mono text-[0.75rem] space-y-1">
         {lines.length ? (
-          lines.map((line) => (
-            <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 py-1.5" key={line.label}>
+          lines.map((line, index) => (
+            <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 py-1.5" key={line.id ?? `${line.label}-${index}`}>
               <span className="truncate text-[#334155]">{line.label}</span>
               <AmountDisplay
                 className={line.sign === "debit" ? "text-[#e11d48] font-bold" : "text-[#059669] font-bold"}
@@ -41,9 +44,9 @@ export function EquationCard({
               />
               {line.passed === false ? (
                 <XCircle aria-label="Failed" className="text-[#e11d48]" size={15} />
-              ) : (
+              ) : line.passed === true ? (
                 <CheckCircle2 aria-label="Passed" className="text-[#059669]" size={15} />
-              )}
+              ) : <span className="text-[0.6rem] text-slate-500">Recorded</span>}
             </div>
           ))
         ) : (
@@ -57,11 +60,11 @@ export function EquationCard({
         </div>
         <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 py-1.5 font-bold text-[#0f172a]">
           <span>Bank Credit</span>
-          <AmountDisplay paise={bankCreditPaise} />
-          {residualPassed ? (
+          {bankCreditPaise === null ? <span className="text-xs text-amber-800">No verified bank receipt</span> : <AmountDisplay paise={bankCreditPaise} />}
+          {bankVerified && bankCreditPaise !== null && bankCreditPaise === netSettlementPaise ? (
             <CheckCircle2 aria-label="Matched" className="text-[#059669]" size={15} />
           ) : (
-            <XCircle aria-label="Mismatched" className="text-[#e11d48]" size={15} />
+            <span className="text-[0.6rem] text-slate-500">Unverified</span>
           )}
         </div>
         <div

@@ -1,4 +1,8 @@
 .env
+.env.*
+**/*.bearer-token
+evaluator_private
+uploads
 .git
 .mypy_cache
 .pytest_cache

@@ -146,7 +146,7 @@ async def main():
                 await s.commit()
                 await service.execute_reconciliation(run_id)
                 await s.commit()
-                await ReviewService(s).assign(
+                await ReviewService(s, expected_review_revision=0).assign(
                     "CASE_AMB0073", actor="reviewer", owner_role="Assigned Reviewer"
                 )
                 await s.commit()

@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from evaluator.schemas import PredictedCase, PredictedEdge, PredictionReport
@@ -333,11 +334,17 @@ def run_reconciliation(
     policy: SettlementPolicy,
     run_id: str,
     matching_mode: MatchingMode = "deterministic_full",
+    on_stage: Callable[[str, int], None] | None = None,
 ) -> ReconciliationResult:
     """Run ingestion, normalization, matching, invariant checks, classification, and cash."""
     stage_timings: list[StageTiming] = []
     run_started = time.perf_counter()
 
+    def report_stage(stage: str, rows: int = 0) -> None:
+        if on_stage is not None:
+            on_stage(stage, rows)
+
+    report_stage("ingestion")
     started = time.perf_counter()
     ingestion_results: list[IngestionResult] = []
     for source_type in _DEFAULT_SOURCE_ORDER:
@@ -350,14 +357,17 @@ def run_reconciliation(
     raw_rows = [
         row for result in ingestion_results for row in (result.accepted_rows + result.rejected_rows)
     ]
+    report_stage("normalization", len(raw_rows))
     normalized_records = normalize_records(raw_rows)
     _time_stage(stage_timings, "normalization", started)
 
     started = time.perf_counter()
+    report_stage("candidate_generation", len(raw_rows))
     candidates = generate_candidates(normalized_records, policy)
     _time_stage(stage_timings, "candidate_generation", started)
 
     started = time.perf_counter()
+    report_stage("matching_rules", len(raw_rows))
     evidence, rule_result = apply_matching_rules(
         normalized_records,
         candidates,
@@ -368,6 +378,7 @@ def run_reconciliation(
     _time_stage(stage_timings, "matching_rules", started)
 
     started = time.perf_counter()
+    report_stage("verification_classification", len(raw_rows))
     cases = _build_cases(normalized_records, candidates, rule_result.ambiguous_candidates)
     exceptions: list[StructuredException] = []
     allocation_invariant = verify_allocation_uniqueness(evidence)
@@ -397,6 +408,7 @@ def run_reconciliation(
     _time_stage(stage_timings, "verification_classification", started)
 
     started = time.perf_counter()
+    report_stage("cash_position", len(raw_rows))
     cash_position = calculate_cash_position(cases, evidence)
     _time_stage(stage_timings, "cash_position", started)
 

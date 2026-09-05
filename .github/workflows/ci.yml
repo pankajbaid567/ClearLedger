@@ -1,0 +1,135 @@
+name: Verify ClearLedger
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      AI_ENABLED: "false"
+      APP_MODE: local_demo
+      DATABASE_URL: postgresql+psycopg://clearledger:clearledger@localhost:5432/clearledger
+      UV_CACHE_DIR: /tmp/clearledger-uv-cache
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: clearledger
+          POSTGRES_PASSWORD: clearledger
+          POSTGRES_DB: clearledger
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U clearledger -d clearledger"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: "3.13"
+          version: "0.11.25"
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: "10.8.1"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - name: Frozen dependencies
+        run: make install
+      - name: Static checks
+        run: |
+          make lint typecheck-core
+          pnpm --dir apps/web lint
+          pnpm --dir apps/web typecheck
+      - name: Clean database migration and schema drift check
+        run: |
+          uv run --frozen alembic upgrade head
+          uv run --frozen alembic check
+      - name: Restricted runtime database role
+        env:
+          PGPASSWORD: clearledger
+        run: |
+          psql -h localhost -U clearledger -d clearledger -f deploy/postgres/runtime_role.sql
+          psql -h localhost -U clearledger -d clearledger -f deploy/postgres/verify_runtime_role.sql
+      - name: Generate explicit synthetic evaluation fixtures
+        run: make generate-demo
+      - name: Python unit, property, API and integration tests
+        run: uv run --frozen pytest --junitxml=out/python-tests.xml
+      - name: Adversarial financial and authorization gates
+        run: make test-adversarial
+      - name: Reproduce measured benchmark claims
+        run: make verify-claims
+      - name: Browser prerequisites
+        run: pnpm --dir apps/web exec playwright install --with-deps chromium
+      - name: Real API browser smoke
+        run: pnpm --dir apps/web test:e2e
+      - name: Retain synthetic results and failure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verification-evidence
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            out/
+            apps/web/playwright-report/
+            apps/web/test-results/
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: "3.13"
+          version: "0.11.25"
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: "10.8.1"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+      - run: make install
+      - name: Source secret patterns
+        run: make secret-scan
+      - name: Runtime dependency advisories
+        run: |
+          pnpm --dir apps/web audit --audit-level=high
+          uv export --frozen --no-dev --no-hashes --format requirements-txt --output-file /tmp/clearledger-requirements.txt
+          uvx --from pip-audit==2.9.0 pip-audit -r /tmp/clearledger-requirements.txt --no-deps --disable-pip
+
+  image-boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Workflow syntax and expression checks
+        run: docker run --rm -v "$GITHUB_WORKSPACE/.github/workflows:/work:ro" -w /work rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 ci.yml
+      - name: Shared image excludes evaluator truth and demo records
+        run: |
+          docker build --target runtime -f apps/api/Dockerfile -t clearledger:runtime .
+          docker run --rm --entrypoint /app/.venv/bin/python clearledger:runtime -c "from pathlib import Path; from apps.api.app.main import app; from apps.api.app.config import settings; assert settings.app_mode == 'shared'; assert not settings.auth_tokens; assert not Path('/app/evaluator_private').exists(); assert not Path('/app/data/demo').exists(); assert Path('/app/prompts/exception_analyst.v1.md').is_file(); assert Path('/app/prompts/grounded_qa.v1.md').is_file()"
+      - name: Demo image creates reproducible synthetic fixtures separately
+        run: |
+          docker build --target demo -f apps/api/Dockerfile -t clearledger:demo .
+          docker run --rm --entrypoint python clearledger:demo -c "from pathlib import Path; import json; d=json.loads(Path('/app/data/demo/dataset_manifest.json').read_text()); assert d['total_source_records'] >= 50; assert Path('/app/evaluator_private/ground_truth_demo.json').is_file()"

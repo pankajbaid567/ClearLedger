@@ -21,11 +21,11 @@ interface SettlementQACardProps {
 }
 
 const suggestedPrompts = [
-  "Why is CASE_AMB0073 unresolved?",
+  "Which cases remain unresolved and why?",
   "What is our confirmed vs at-risk cash?",
   "What is our Straight-Through Processing (STP) rate?",
   "Which cases had fee variances?",
-  "Tell me about CASE_MN0060",
+  "Which cases need additional bank evidence?",
 ];
 
 export function SettlementQACard({ runId }: SettlementQACardProps) {
@@ -72,7 +72,7 @@ export function SettlementQACard({ runId }: SettlementQACardProps) {
           </div>
         </div>
         <span className="text-[0.65rem] font-semibold text-[#64748b] bg-white border border-[#e2e8f0] rounded-[6px] px-2.5 py-1">
-          Non-authoritative · Zero arithmetic hallucinations
+          Read-only · Inspect cited evidence
         </span>
       </div>
 
@@ -103,6 +103,7 @@ export function SettlementQACard({ runId }: SettlementQACardProps) {
           <div className="relative flex-1">
             <input
               type="text"
+              aria-label="Settlement question"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               placeholder="Ask about cases, cash confidence buckets, exceptions, or invariants..."
@@ -153,7 +154,7 @@ export function SettlementQACard({ runId }: SettlementQACardProps) {
                       {item.model}
                     </span>
                     <span className="inline-flex items-center gap-1 rounded border border-[#a7f3d0] bg-[#ecfdf5] px-2 py-0.5 text-[0.62rem] font-bold text-[#065f46]">
-                      <ShieldCheck aria-hidden="true" size={10} /> Fact Verified
+                      <ShieldCheck aria-hidden="true" size={10} /> {item.grounded ? "Grounded response" : "Not verified"}
                     </span>
                   </div>
                 </div>
@@ -170,7 +171,7 @@ export function SettlementQACard({ runId }: SettlementQACardProps) {
                         {item.cited_case_ids.map((cid) => (
                           <Link
                             key={cid}
-                            href={`/runs/${runId}/cases?search=${encodeURIComponent(cid)}`}
+                            href={`/runs/${runId}/cases?case=${encodeURIComponent(cid)}`}
                             className="inline-flex items-center gap-1 rounded-[5px] border border-[#bfdbfe] bg-[#f0f7ff] px-2 py-0.5 font-mono text-[0.67rem] font-bold text-[#0c44ac] hover:border-[#0c44ac] hover:bg-white transition-colors"
                           >
                             <span>{cid}</span>

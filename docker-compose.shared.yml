@@ -1,0 +1,36 @@
+# Use with docker-compose.yml behind an HTTPS reverse proxy. Ports remain loopback.
+# No private evaluator oracle or synthetic fixture is baked into the shared image.
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set a dedicated database password}"
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
+    environment:
+      DATABASE_DIRECT_URL: "${DATABASE_DIRECT_URL:?Set the schema-owner migration URL}"
+    depends_on:
+      db:
+        condition: service_healthy
+  api:
+    build:
+      target: runtime
+    environment:
+      APP_ENV: production
+      APP_MODE: shared
+      AUTH_TOKENS: "${AUTH_TOKENS:?Set the configured bearer digest identity list}"
+      DATABASE_URL: "${DATABASE_URL:?Set the dedicated PostgreSQL connection URL}"
+      WEB_ORIGIN: "${WEB_ORIGIN:?Set the public HTTPS web origin}"
+      AI_ENABLED: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+  web:
+    build:
+      args:
+        NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:?Set the public HTTPS API URL ending in /api}"
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:?Set the public HTTPS API URL ending in /api}"

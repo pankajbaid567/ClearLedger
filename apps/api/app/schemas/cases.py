@@ -32,6 +32,13 @@ class CaseSummary(BaseModel):
     human_reviewed: bool
     created_at: datetime
     updated_at: datetime
+    cash_bucket_contribution_paise: int = 0
+    cash_contribution_basis: str = "not_computed"
+    event_at: datetime | None = None
+    age_days: int | None = None
+    sla_due_at: datetime | None = None
+    days_past_sla: int | None = None
+    review_due_at: datetime | None = None
 
 
 class CaseDetail(CaseSummary):
@@ -82,6 +89,10 @@ class InvariantResponse(BaseModel):
 
 
 class VerificationReceiptResponse(BaseModel):
+    run_id: uuid.UUID
+    execution_revision: int = 1
+    review_revision: int = 0
+    snapshot_kind: str = "current_review_projection"
     case_id: str
     case_state: str
     residual_paise: int
@@ -89,6 +100,9 @@ class VerificationReceiptResponse(BaseModel):
     invariants: list[InvariantResponse]
     evidence_edge_count: int
     result_checksum: str | None
+    baseline_result_checksum: str | None
+    current_review_checksum: str
+    review_checksum_payload: dict[str, Any]
 
 
 class CandidateResponse(BaseModel):
@@ -105,9 +119,9 @@ class CandidateResponse(BaseModel):
     currency: str
     rule_id: str | None
     actor_type: str
-    
+
     @classmethod
-    def model_validate(cls, obj: Any, **kwargs: Any) -> "CandidateResponse":
+    def model_validate(cls, obj: Any, **kwargs: Any) -> CandidateResponse:
         """Convert scaled integer match_score (0-10000) to float (0.0-1.0) for API response."""
         if hasattr(obj, "match_score") and obj.match_score is not None:
             # Create a mutable copy to avoid modifying the database object
@@ -155,9 +169,9 @@ class AIAnalysisDetailResponse(BaseModel):
     deterministic_checks: list[dict[str, Any]] | None
     error_type: str | None
     created_at: datetime
-    
+
     @classmethod
-    def model_validate(cls, obj: Any, **kwargs: Any) -> "AIAnalysisDetailResponse":
+    def model_validate(cls, obj: Any, **kwargs: Any) -> AIAnalysisDetailResponse:
         """Convert micro-dollar estimated_cost to USD float for API response."""
         if hasattr(obj, "estimated_cost"):
             data = {
@@ -198,6 +212,11 @@ class CashPositionResponse(BaseModel):
     known_reserve_holds_paise: int
     safe_cash_paise: int
     buckets: dict[str, Any]
+    cash_scope: str = "CONFIRMED_BATCH_NET_MOVEMENTS"
+    deductions_already_in_settlement_net: bool = True
+    as_of_at: datetime | None = None
+    execution_revision: int = 1
+    review_revision: int = 0
 
 
 class CashForecastDayResponse(BaseModel):
@@ -211,7 +230,8 @@ class CashForecastDayResponse(BaseModel):
     expected_inflow_paise: int
     scheduled_deductions_paise: int
     closing_cash_paise: int
-    confidence_score: float
+    confidence_score: float | None = None
+    confidence_basis: str = "SCHEDULE_ONLY_NOT_CALIBRATED"
     case_count: int
     case_ids: list[str] = Field(default_factory=list)
     settlement_ids: list[str] = Field(default_factory=list)
@@ -221,12 +241,17 @@ class CashForecastResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     run_id: str
+    execution_revision: int = 1
+    review_revision: int = 0
     as_of_date: str
     currency: str
     days: list[CashForecastDayResponse]
     total_projected_inflow_paise: int
     baseline_safe_cash_paise: int
     projected_final_cash_paise: int
+    forecast_scope: str = "SETTLEMENT_RECEIPTS_ONLY"
+    overdue_inflow_paise: int = 0
+    undated_inflow_paise: int = 0
 
 
 class TaxDiscrepancyItemResponse(BaseModel):
@@ -243,12 +268,15 @@ class TaxDiscrepancyItemResponse(BaseModel):
     expected_tax_paise: int
     tax_variance_paise: int
     exception_code: str | None
+    discrepancy_code: str = "POLICY_VARIANCE"
 
 
 class TaxAuditResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     run_id: str
+    execution_revision: int = 1
+    review_revision: int = 0
     currency: str
     total_cases_audited: int
     gross_payment_volume_paise: int
@@ -258,13 +286,25 @@ class TaxAuditResponse(BaseModel):
     total_tax_paise: int
     expected_tax_paise: int
     tax_variance_paise: int
-    claimable_itc_paise: int
+    claimable_itc_paise: int | None = None
     disputed_tax_paise: int
-    tax_policy_pass_rate: float
-    fee_policy_pass_rate: float
+    tax_policy_pass_rate: float | None
+    fee_policy_pass_rate: float | None
     discrepant_case_count: int
+    unmatched_component_count: int
     discrepancies: list[TaxDiscrepancyItemResponse] = Field(default_factory=list)
-    itc_status: str
+    itc_status: str = "UNAVAILABLE"
+    evidence_status: str = "POLICY_ARITHMETIC_ONLY"
+    external_tax_statement_available: bool = False
+    policy_id: str | None = None
+    policy_version: str | None = None
+    gateway_fee_rate_numerator: int
+    gateway_fee_rate_denominator: int
+    tax_rate_numerator: int
+    tax_rate_denominator: int
+    checked_payment_count: int
+    supported_tax_paise: int
+    consistency_status: str
 
 
 class AuditEventResponse(BaseModel):

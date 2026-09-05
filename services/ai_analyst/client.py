@@ -159,12 +159,14 @@ class OpenAICompatibleClient:
                     logger.warning("AI analysis timed out for case %s", case_id)
                     break
                 except openai.APIError as exc:
+                    status_code = getattr(exc, "status_code", None)
                     retryable = attempt < self.config.max_retries and (
                         (
                             (_is_groq(self.config) or _is_hugging_face(self.config))
-                            and exc.status_code == 400
+                            and status_code == 400
                         )
-                        or (exc.status_code is not None and exc.status_code >= 500)
+                        or status_code is None
+                        or status_code >= 500
                     )
                     if retryable:
                         logger.warning(

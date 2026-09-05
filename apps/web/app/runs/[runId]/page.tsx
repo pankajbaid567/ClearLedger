@@ -43,7 +43,6 @@ import { MetricCard } from "@/components/MetricCard";
 import { SettlementQACard } from "@/components/SettlementQACard";
 import { getCases, getCashPosition, getMetrics, getRun, exportUrl } from "@/lib/api";
 import {
-  ageDays,
   formatDuration,
   formatInteger,
   formatPaise,
@@ -80,6 +79,7 @@ export default function ControlRoomPage() {
   const cases = casesQuery.data?.items ?? [];
   const cash = cashQuery.data;
   const metrics = metricsQuery.data?.metrics ?? {};
+  const metricVersion = metricsQuery.data;
   const ai = asRecord(metrics.ai);
   const aiWarnings = Array.isArray(ai.warnings)
     ? ai.warnings.filter((item): item is string => typeof item === "string")
@@ -142,7 +142,7 @@ export default function ControlRoomPage() {
       ]
     : [];
   const overdue = exception.filter(
-    (item) => item.exception_code?.includes("OVERDUE") || ageDays(item.created_at) > 3,
+    (item) => (item.days_past_sla ?? 0) > 0,
   ).length;
   const slaData = [
     { label: "Within SLA", value: pending.length },
@@ -175,6 +175,7 @@ export default function ControlRoomPage() {
             cashQuery.refetch(),
           ]);
         }}
+        error={failed}
         title="Control room unavailable"
       />
     );
@@ -187,7 +188,7 @@ export default function ControlRoomPage() {
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <p className="eyebrow mb-0">Reconciliation control room</p>
             <span className="inline-flex items-center gap-1.5 rounded-full bg-[#ecfdf5] border border-[#a7f3d0] px-2.5 py-1 text-[0.6rem] font-bold text-[#065f46]">
-              <span className="status-dot bg-[#059669]" /> Complete
+              <span className="status-dot bg-[#059669]" /> {titleCase(run.status)}
             </span>
           </div>
           <h1 className="page-title">Settlement run overview</h1>
@@ -205,7 +206,7 @@ export default function ControlRoomPage() {
             <Scale aria-hidden="true" size={15} />
             Claims Ledger
             <span className="rounded bg-[#059669] px-1.5 py-0.5 text-[0.6rem] font-bold text-white">
-              10/10 Verified
+              Inspect evidence
             </span>
           </button>
           <Link className="btn btn-secondary" href={`/runs/${runId}/cases`}>
@@ -249,16 +250,19 @@ export default function ControlRoomPage() {
               </strong>
             </div>
           </div>
-          <Link className="btn btn-secondary border-[#f43f5e]/30 bg-white text-[#be123c] hover:bg-[#fff1f2]" href={`/runs/${runId}/cases?state=ACTIONABLE_EXCEPTION`}>
+          <Link className="btn btn-secondary border-[#f43f5e]/30 bg-white text-[#be123c] hover:bg-[#fff1f2]" href={`/runs/${runId}/cases?state=ACTIONABLE_EXCEPTION&state=SUGGESTED_FOR_REVIEW&state=APPROVED_PENDING_VERIFICATION&state=REJECTED_SUGGESTION&state=DEFERRED&state=INVALID_INPUT`}>
             Open exception queue <ArrowRight aria-hidden="true" size={14} />
           </Link>
         </section>
       ) : null}
 
       <section aria-labelledby="processing-metrics">
-        <h2 className="section-label" id="processing-metrics">
-          Processing
-        </h2>
+        <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="section-label mb-0" id="processing-metrics">Processing</h2>
+          <span className="text-[0.66rem] text-slate-500">
+            Current projection · execution {metricVersion?.execution_revision ?? run.execution_revision}, review {metricVersion?.review_revision ?? run.review_revision}
+          </span>
+        </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <MetricCard
             detail="Economic cases"
@@ -298,7 +302,7 @@ export default function ControlRoomPage() {
             <Scale aria-hidden="true" size={13} />
             <span>Open Claims Ledger</span>
             <span className="rounded bg-[#059669] px-1.5 py-0.2 text-[0.58rem] font-extrabold text-white">
-              10/10 Verified
+              Inspect evidence
             </span>
           </button>
         </div>
@@ -314,34 +318,34 @@ export default function ControlRoomPage() {
           <MetricCard
             detail={
               hasRelationshipCounts
-                ? `${formatInteger(relationshipTruePositives)} / ${formatInteger(metricNumber(metrics.relationship_predicted_count))} predicted relationships correct`
-                : "Ground-truth evaluation"
+                ? `${formatInteger(relationshipTruePositives)} / ${formatInteger(metricNumber(metrics.relationship_predicted_count))} predicted relationships correct · immutable engine baseline`
+                : "Immutable engine-baseline evaluation"
             }
             href={`/runs/${runId}/audit`}
             icon={CheckCheck}
-            label="Precision"
+            label="Baseline Precision"
             tone="verified"
-            value={formatPercent(metricNumber(metrics.relationship_precision, metricNumber(metrics.precision)))}
+            value={typeof metrics.relationship_precision === "number" ? formatPercent(metrics.relationship_precision) : "Not evaluated"}
           />
           <MetricCard
             detail={
               hasRelationshipCounts
-                ? `${formatInteger(relationshipTruePositives)} / ${formatInteger(metricNumber(metrics.relationship_expected_count))} expected relationships found`
-                : "Ground-truth evaluation"
+                ? `${formatInteger(relationshipTruePositives)} / ${formatInteger(metricNumber(metrics.relationship_expected_count))} expected relationships found · immutable engine baseline`
+                : "Immutable engine-baseline evaluation"
             }
             href={`/runs/${runId}/audit`}
             icon={Percent}
-            label="Recall"
+            label="Baseline Recall"
             tone="verified"
-            value={formatPercent(metricNumber(metrics.relationship_recall, metricNumber(metrics.recall)))}
+            value={typeof metrics.relationship_recall === "number" ? formatPercent(metrics.relationship_recall) : "Not evaluated"}
           />
           <MetricCard
-            detail={`${formatInteger(reconciled.length)} / ${formatInteger(totalCases)} cases without human intervention`}
-            href={`/runs/${runId}/cases?human=pending`}
+            detail={`${formatInteger(reconciled.filter((item) => !item.human_reviewed).length)} / ${formatInteger(totalCases)} cases without human intervention`}
+            href={`/runs/${runId}/cases?state=RECONCILED&human=pending`}
             icon={Gauge}
             label="Straight-Through Processing"
             tone="verified"
-            value={formatPercent(metricNumber(metrics.stp_rate, verifiedRate))}
+            value={formatPercent(totalCases ? reconciled.filter((item) => !item.human_reviewed).length / totalCases : 0)}
           />
         </div>
       </section>
@@ -379,7 +383,7 @@ export default function ControlRoomPage() {
             detail="Cannot safely classify"
             href={`/runs/${runId}/cases?bucket=UNRESOLVED`}
             icon={ReceiptText}
-            label="Unresolved Residual"
+            label="Unresolved Exposure"
             value={formatPaise(cash.unresolved_paise)}
           />
         </div>
@@ -464,7 +468,7 @@ export default function ControlRoomPage() {
                         ? "PENDING_WITHIN_SLA"
                         : item.name === "Invalid"
                           ? "INVALID_INPUT"
-                          : "ACTIONABLE_EXCEPTION"
+                          : "ACTIONABLE_EXCEPTION&state=SUGGESTED_FOR_REVIEW&state=APPROVED_PENDING_VERIFICATION&state=REJECTED_SUGGESTION&state=DEFERRED"
                   }`}
                   key={item.name}
                 >
@@ -546,7 +550,7 @@ export default function ControlRoomPage() {
         </div>
       </section>
 
-      <SettlementQACard runId={runId} />
+      <SettlementQACard key={runId} runId={runId} />
 
       <section className="panel">
         <div className="panel-header">
@@ -559,6 +563,7 @@ export default function ControlRoomPage() {
           <ExportButton href={exportUrl(runId, "reconciliation.csv")} label="Reconciliation CSV" testId="download-reconciliation" />
           <ExportButton href={exportUrl(runId, "exceptions.csv")} label="Exceptions CSV" />
           <ExportButton href={exportUrl(runId, "audit.json")} label="Audit JSON" />
+          <ExportButton digestHeader="X-Control-Package-SHA256" href={exportUrl(runId, "control-package.json")} label="Control package + digest" testId="download-control-package" />
         </div>
       </section>
 

@@ -7,9 +7,10 @@ Its most important security property is fail-closed financial classification: un
 model output, or a human click cannot create a verified allocation unless deterministic evidence
 and exact arithmetic pass.
 
-Production identity, SSO, tenant isolation, encryption-key management, and authorization policy
-are deployment responsibilities outside this hackathon build. Demo review actors are visibly
-recorded as operator actions; they are not represented as authenticated production users.
+Shared mode authenticates configured high-entropy bearer identities, derives audit actors on the
+server, applies role permissions, and scopes every run resource to its owner. Local demo mode is
+explicit, synthetic, and loopback-only. Enterprise SSO, MFA, organization-level tenancy,
+maker/checker separation, token expiry, and managed key lifecycle remain deployment work.
 
 ## Threat Model
 
@@ -20,7 +21,7 @@ recorded as operator actions; they are not represented as authenticated producti
 | Double allocation | Allocate one settlement or bank movement more than once. | `EvidenceGraph` tracks absolute allocation by relationship/entity and rejects any proposed verified edge beyond registered availability. Property tests cover arbitrary amounts. | Non-authoritative candidates may overlap; only verified edges consume availability. |
 | Fabricated AI evidence | Model cites an ID, amount, invariant, or candidate not present in its packet. | Closed Pydantic schema, evidence-ID allowlist, candidate-ID allowlist, identifier-value validation, one retry, then fail closed. | Provider raw output is retained for audit but never trusted as a fact. |
 | CSV formula injection | Exported text begins with `=`, `+`, `-`, `@`, tab, or carriage return. | Every CSV cell passes `_safe_cell`; dangerous prefixes receive a leading apostrophe. Tests cover formula and command prefixes. | Consumers that deliberately strip the apostrophe can reintroduce risk. |
-| Unauthorized accounting action | Caller attempts approval, defer, assignment, or an external posting. | Review actions are typed, idempotent, audited, and marked with the supplied demo operator. Approval reruns invariants and cannot override a residual. No endpoint or tool posts journals, payouts, refunds, or source-system writes. | This demo has no production authentication; do not expose it to untrusted networks without an identity gateway and authorization layer. |
+| Unauthorized accounting action | Caller attempts another subject's run or a mutation outside their role. | Shared mode requires a configured bearer identity, derives actors server-side, enforces viewer/operator/reviewer/admin permissions, and scopes run resources to `owner_subject`. Approval reruns invariants and cannot override a residual. | Pilot tokens have operator-managed rotation and no automatic expiry; organization tenancy and maker/checker separation are not implemented. |
 | Database outage during mutation | Connection loss could create partial or ambiguous state. | Request sessions commit only after successful completion and roll back on exception. Database errors return `503 DATABASE_UNAVAILABLE` with `Retry-After`; run failures are explicit. Readiness reports database state. | Filesystem upload bytes may require operational cleanup after host failure; database registration remains transactional. |
 | AI provider outage or malformed output | Timeout, invalid JSON, or provider error blocks the batch. | AI runs after deterministic persistence, has a bounded timeout, retries invalid structured output once, records warnings, and leaves cases unresolved. The UI displays degraded AI state. | Live triage suggestions are absent until a provider succeeds. |
 
@@ -34,8 +35,8 @@ recorded as operator actions; they are not represented as authenticated producti
    persistence is performed by deterministic application code after validation.
 4. **Every cited evidence ID is validated.** Fabricated evidence/candidate IDs reject the entire
    response. Invalid JSON is retried once and then rejected.
-5. **Human actions are clearly demo operator actions.** Actor, action, prior/new state, reason,
-   note, and invariant result are written to decisions and audit events.
+5. **Human actors are server-derived.** Actor, action, prior/new state, reason, note, execution
+   revision, review revision, and invariant result are written to decisions and audit events.
 6. **No autonomous ledger or payout write exists.** `ALLOW_EXTERNAL_WRITES` defaults false and no
    external-write implementation or route exists.
 7. **Export formulas are escaped.** All reconciliation/exception CSV cells use centralized prefix
@@ -44,8 +45,9 @@ recorded as operator actions; they are not represented as authenticated producti
    source type, and be no larger than `MAX_UPLOAD_BYTES` (10 MiB by default).
 9. **Secrets are externalized.** `.env` is ignored; `.env.example` contains names and empty/default
    values only. AI credentials are Pydantic `SecretStr` values and are not logged.
-10. **Raw source rows remain immutable.** Original values, file checksum, row number, quality, and
-    issues are append-only; derived canonical records and decisions live in separate tables.
+10. **Raw evidence and decisions are database-enforced append-only.** PostgreSQL triggers reject
+    update, delete, and truncate for raw rows, policy versions, human decisions, and audit events.
+    Original source bytes are checksum-verified again when a control package is exported.
 11. **Money is exact.** Authoritative values use Python integers and PostgreSQL `BIGINT`; a
     reconciled case requires zero paise residual.
 12. **Ground truth is outside reconciliation.** Only the standalone evaluator accepts a truth
@@ -77,14 +79,14 @@ make security-scan
 | Backend dependency advisories | `uv export ...` then `uv tool run pip-audit -r ... --no-deps --disable-pip` | No unresolved critical finding; document any upstream advisory. |
 | Repository secret scan | `python -m scripts.scan_secrets` | No credential/private-key match. |
 
-Release scan on 2026-09-01:
+Release scan on 2026-09-05:
 
 - `pnpm audit`: **no known vulnerabilities** after overriding transitive PostCSS to `8.5.23`.
   The first scan found two high and two moderate source-map disclosure advisories; all were fixed.
 - `pip-audit`: **no known vulnerabilities** across the fully pinned production `uv` export.
 - repository secret scan: **passed**, with no matching credential or private-key material.
 
-Scanner output is operational evidence; it is not a substitute for production authentication,
+Scanner output is operational evidence; it is not a substitute for enterprise identity,
 network policy, TLS, managed secrets, or periodic dependency updates.
 
 ## Reporting
