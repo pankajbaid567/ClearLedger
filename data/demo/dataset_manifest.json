@@ -1,0 +1,32 @@
+{
+  "dataset_id": "demo_20260827",
+  "seed": 20260827,
+  "generator_version": "1.0.0",
+  "policy_version": "1.0.0",
+  "currency": "INR",
+  "date_range_start": "2026-08-01",
+  "date_range_end": "2026-08-18",
+  "scenario_counts": {
+    "clean_lifecycle": 20,
+    "batched_settlement": 10,
+    "timing_delay": 7,
+    "holiday_shift": 4,
+    "refund": 6,
+    "chargeback": 4,
+    "split_settlement": 4,
+    "fee_variance": 4,
+    "messy_narration": 5,
+    "malformed_input": 4,
+    "missing_event": 4,
+    "ambiguous": 3
+  },
+  "total_cases": 75,
+  "total_source_records": 693,
+  "file_checksums": {
+    "orders.csv": "32c5053c6901aa7dbc99349a2ecdfb59607a339e2304ddd6087c839a32716b68",
+    "payments.csv": "a6fc5c06f5c358866f87a0055e105fbbe3c91674961f914ee4875e43d991036c",
+    "settlements.csv": "281205be051c7215065c5262dbcc80ddb4d042cd50a75ea99b8b3745b435aa68",
+    "settlement_components.csv": "360665664379ea3176d9225122a68a7f3a2216c523d3884c58fb607c27f126df",
+    "bank_transactions.csv": "d23bbf8b331910f0bb6e2ca98998b0cccf1459eb677789f50ecb209b1a07c8bf"
+  }
+}

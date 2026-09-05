@@ -1,0 +1,14 @@
+.env
+.git
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.venv
+**/__pycache__
+**/*.pyc
+apps/web/.next*
+apps/web/node_modules
+apps/web/playwright-report
+apps/web/test-results
+data/stress
+out

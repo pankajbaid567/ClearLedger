@@ -1,0 +1,24 @@
+{
+  "policy_id": "settlement_policy",
+  "version": "1.0.0",
+  "currency": "INR",
+  "capture_to_settlement_days": 2,
+  "settlement_to_bank_days": 1,
+  "cutoff_time": "16:00:00",
+  "timezone": "Asia/Kolkata",
+  "weekend_rule": "shift_to_next_business_day",
+  "holiday_calendar_id": "holidays_v1",
+  "fee_schedule": {
+    "gateway_fee_percentage": 200,
+    "gateway_fee_percentage_denominator": 10000,
+    "tax_on_fee_percentage": 1800,
+    "tax_on_fee_percentage_denominator": 10000,
+    "note": "fee = 2% of captured amount; tax = 18% of fee. All in integer basis points."
+  },
+  "materiality_rules": {
+    "amount_variance_threshold_paise": 100,
+    "critical_amount_paise": 10000000
+  },
+  "effective_from": "2026-01-01",
+  "effective_to": null
+}

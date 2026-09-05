@@ -1,0 +1,84 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: clearledger
+      POSTGRES_PASSWORD: clearledger
+      POSTGRES_DB: clearledger
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - clearledger_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clearledger -d clearledger"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://clearledger:clearledger@db:5432/clearledger
+      WEB_ORIGIN: "http://localhost:${WEB_PORT:-3000}"
+      UPLOAD_DIR: /var/lib/clearledger/uploads
+      AI_ENABLED: "${AI_ENABLED:-false}"
+      AI_PROVIDER: "${AI_PROVIDER:-none}"
+      AI_MODEL: "${AI_MODEL:-}"
+      AI_API_KEY: "${AI_API_KEY:-}"
+      AI_BASE_URL: "${AI_BASE_URL:-}"
+      AI_TIMEOUT_SECONDS: "${AI_TIMEOUT_SECONDS:-20}"
+      AI_MAX_RETRIES: "${AI_MAX_RETRIES:-1}"
+      AI_MAX_CASES_PER_RUN: "${AI_MAX_CASES_PER_RUN:-20}"
+      AI_PROMPT_VERSION: "${AI_PROMPT_VERSION:-exception_analyst.v1}"
+      AI_MAX_PACKET_CHARS: "${AI_MAX_PACKET_CHARS:-12000}"
+      AI_INPUT_COST_PER_1K_TOKENS: "${AI_INPUT_COST_PER_1K_TOKENS:-0}"
+      AI_OUTPUT_COST_PER_1K_TOKENS: "${AI_OUTPUT_COST_PER_1K_TOKENS:-0}"
+      ALLOW_EXTERNAL_WRITES: "false"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - clearledger_uploads:/var/lib/clearledger/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: "http://localhost:${API_PORT:-8000}/api"
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: "http://localhost:${API_PORT:-8000}/api"
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  clearledger_pgdata:
+  clearledger_uploads:

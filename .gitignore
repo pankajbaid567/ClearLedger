@@ -1,0 +1,189 @@
+# ============================================
+# ClearLedger .gitignore
+# ============================================
+
+# Environment & Secrets
+# ============================================
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+secrets.yaml
+credentials.json
+
+# Python
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual Environments
+# ============================================
+.venv/
+venv/
+ENV/
+env/
+.virtualenv/
+
+# Testing & Coverage
+# ============================================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+junit.xml
+test-results/
+
+# Type Checking & Linting
+# ============================================
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pytype/
+.pyre/
+pyrightconfig.json
+
+# IDEs & Editors
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# Node.js & Frontend
+# ============================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.pnpm-store/
+
+# Next.js
+# ============================================
+.next/
+.next-phase5-dev/
+.next-playwright/
+.next-e2e/
+playwright-report/
+*.tsbuildinfo
+out/
+build/
+.vercel
+.turbo
+
+# Database
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+pgdata/
+postgres-data/
+
+# Output & Logs
+# ============================================
+out/
+logs/
+*.log
+*.log.*
+tmp/
+temp/
+*.tmp
+
+# Alembic
+# ============================================
+# Keep migrations but ignore temp files
+alembic/versions/__pycache__/
+
+# UV Package Manager
+# ============================================
+.uv/
+
+# Data & Uploads (keep structure, ignore contents)
+# ============================================
+data/*
+!data/.gitkeep
+!data/README.md
+!data/demo/
+uploads/
+*.csv
+!data/demo/*.csv
+*.xlsx
+*.xls
+
+# Private/Sensitive
+# ============================================
+evaluator_private/
+ground_truth_*.json
+*.backup
+*.bak
+
+# OS & System
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Docker
+# ============================================
+docker-compose.override.yml
+
+# Jupyter Notebooks
+# ============================================
+.ipynb_checkpoints
+*.ipynb
+
+# Misc
+# ============================================
+.cache/
+.parcel-cache/
+.sass-cache/
+*.pid
+*.seed
+*.pid.lock
