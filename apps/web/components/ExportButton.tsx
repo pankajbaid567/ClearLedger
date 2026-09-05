@@ -9,7 +9,9 @@ function saveBlob(blob: Blob, filename: string) {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
+  document.body.appendChild(anchor); // Ensure anchor is in DOM
   anchor.click();
+  document.body.removeChild(anchor);
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
@@ -30,6 +32,8 @@ export function ExportButton({ href, label, testId, digestHeader }: { href: stri
       if (digestHeader && !separateDigest) throw new Error("The server omitted the independent artifact digest.");
       saveBlob(await response.blob(), filename);
       if (separateDigest) {
+        // Small delay to ensure browser registers both download events in test environments
+        await new Promise((resolve) => setTimeout(resolve, 100));
         saveBlob(new Blob([`${separateDigest}  ${filename}\n`], { type: "text/plain" }), `${filename}.sha256`);
         setDigest(separateDigest);
       }
