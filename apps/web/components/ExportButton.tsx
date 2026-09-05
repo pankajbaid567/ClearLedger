@@ -4,25 +4,34 @@ import { Download } from "lucide-react";
 import { useState } from "react";
 import { accessHeaders } from "@/lib/api";
 
-function saveBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor); // Ensure anchor is in DOM
-  anchor.click();
-  document.body.removeChild(anchor);
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+function triggerDirectDownload(url: string, headers: Record<string, string>) {
+  fetch(url, { headers })
+    .then((res) => {
+      if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+      return res.blob();
+    })
+    .then((blob) => {
+      const blobUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = url.split("/").pop() ?? "download";
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    })
+    .catch((err) => console.error("Download failed:", err));
 }
 
-export function ExportButton({ href, label, testId, digestHeader }: { href: string; label: string; testId?: string; digestHeader?: string }) {
+export function ExportButton({ href, label, testId, digestHeader, sidecarUrl }: { href: string; label: string; testId?: string; digestHeader?: string; sidecarUrl?: string }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [digest, setDigest] = useState<string | null>(null);
   async function download() {
     setPending(true); setError(null); setDigest(null);
     try {
-      const response = await fetch(href, { headers: accessHeaders() });
+      const headers = accessHeaders();
+      const response = await fetch(href, { headers });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         throw new Error(`${body?.error?.message ?? `Download failed (${response.status})`}${body?.error?.request_id ? ` · Request ${body.error.request_id}` : ""}`);
@@ -30,12 +39,22 @@ export function ExportButton({ href, label, testId, digestHeader }: { href: stri
       const filename = href.split("/").pop() ?? "export";
       const separateDigest = digestHeader ? response.headers.get(digestHeader) : null;
       if (digestHeader && !separateDigest) throw new Error("The server omitted the independent artifact digest.");
-      saveBlob(await response.blob(), filename);
-      if (separateDigest) {
-        // Small delay to ensure browser registers both download events in test environments
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        saveBlob(new Blob([`${separateDigest}  ${filename}\n`], { type: "text/plain" }), `${filename}.sha256`);
-        setDigest(separateDigest);
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      
+      if (sidecarUrl) {
+        // Download the sidecar from a separate endpoint after a small delay
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        triggerDirectDownload(sidecarUrl, headers);
+        if (separateDigest) setDigest(separateDigest);
       }
     } catch (err) { setError(err instanceof Error ? err.message : "Download unavailable. Try again."); }
     finally { setPending(false); }

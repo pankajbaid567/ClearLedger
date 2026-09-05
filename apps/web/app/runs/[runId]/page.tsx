@@ -563,7 +563,13 @@ export default function ControlRoomPage() {
           <ExportButton href={exportUrl(runId, "reconciliation.csv")} label="Reconciliation CSV" testId="download-reconciliation" />
           <ExportButton href={exportUrl(runId, "exceptions.csv")} label="Exceptions CSV" />
           <ExportButton href={exportUrl(runId, "audit.json")} label="Audit JSON" />
-          <ExportButton digestHeader="X-Control-Package-SHA256" href={exportUrl(runId, "control-package.json")} label="Control package + digest" testId="download-control-package" />
+          <ExportButton 
+            digestHeader="X-Control-Package-SHA256" 
+            href={exportUrl(runId, "control-package.json")} 
+            label="Control package + digest" 
+            sidecarUrl={exportUrl(runId, "control-package.json.sha256")}
+            testId="download-control-package" 
+          />
         </div>
       </section>
 

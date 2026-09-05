@@ -342,3 +342,22 @@ async def export_control_package(
             "X-Control-Package-SHA256": package["sha256"],
         },
     )
+
+
+@router.get("/{run_id}/exports/control-package.json.sha256")
+async def export_control_package_digest(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    config: Settings = Depends(get_settings),
+) -> Response:
+    """Return the SHA-256 digest sidecar for the control package."""
+    run = await require_run(session, run_id)
+    package = await build_control_package(session, run, config.upload_dir)
+    digest_content = f"{package['sha256']}  control-package-{run_id}.json\n"
+    return Response(
+        content=digest_content,
+        media_type="text/plain",
+        headers={
+            "Content-Disposition": f'attachment; filename="control-package-{run_id}.json.sha256"',
+        },
+    )
