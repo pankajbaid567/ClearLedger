@@ -132,6 +132,7 @@ Measured outputs are written to `out/`, including `evaluation.md`, `ablation_rep
 
 ## Submission Documents
 
+- [Detailed technical and product review — 5 September 2026](docs/REVIEW_2026-09-05.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Data dictionary](docs/DATA_DICTIONARY.md)
 - [Evaluation methodology](docs/EVALUATION.md)

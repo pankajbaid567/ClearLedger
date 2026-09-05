@@ -1,0 +1,54 @@
+{
+  "dataset_id": "demo_20260827",
+  "authoritative_boundary": "AI may rank or explain precomputed candidates but cannot change verified state.",
+  "modes": [
+    {
+      "mode": "exact_id_only",
+      "description": "Rules 1-3 only",
+      "precision": 0.9554,
+      "recall": 1.0,
+      "f1": 0.9772,
+      "stp_rate": 0.7067,
+      "exception_count": 15,
+      "cases_correctly_classified": 75,
+      "total_cases": 75,
+      "runtime_seconds": 0.081425,
+      "ai_calls": null,
+      "ai_cost_usd": null,
+      "ai_assisted_cases": null,
+      "ai_status": "not_applicable"
+    },
+    {
+      "mode": "deterministic_full",
+      "description": "All 9 deterministic rules; AI off",
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "stp_rate": 0.7067,
+      "exception_count": 15,
+      "cases_correctly_classified": 75,
+      "total_cases": 75,
+      "runtime_seconds": 0.084878,
+      "ai_calls": null,
+      "ai_cost_usd": null,
+      "ai_assisted_cases": null,
+      "ai_status": "not_applicable"
+    },
+    {
+      "mode": "deterministic_plus_ai",
+      "description": "Full deterministic engine plus bounded AI analyst",
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "stp_rate": 0.7067,
+      "exception_count": 15,
+      "cases_correctly_classified": 75,
+      "total_cases": 75,
+      "runtime_seconds": 0.110849,
+      "ai_calls": 0,
+      "ai_cost_usd": 0.0,
+      "ai_assisted_cases": 0,
+      "ai_status": "disabled"
+    }
+  ]
+}

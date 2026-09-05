@@ -1,0 +1,1 @@
+{"test": "concurrent_approvals_lose_aggregate", "cases": {"CASE_A": "RECONCILED", "CASE_B": "RECONCILED"}, "expected_bank_confirmed": 300, "actual_bank_confirmed": 100, "metrics": {"total_cases": 2, "cases_by_state": {"RECONCILED": 1, "ACTIONABLE_EXCEPTION": 1}, "exception_cases": 1, "reconciled_cases": 1}}

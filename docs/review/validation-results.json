@@ -1,0 +1,62 @@
+{
+  "review_date": "2026-09-05",
+  "baseline_commit": "36794ac3262c651a93da17a1fabf13449d2bee1e",
+  "ai_provider_calls": 0,
+  "python_suite": {
+    "collected": 151,
+    "passed": 130,
+    "failed": 10,
+    "errors": 11
+  },
+  "ruff": {
+    "errors": 7
+  },
+  "mypy": {
+    "errors": 144,
+    "files_with_errors": 24,
+    "files_checked": 104,
+    "scope": "services packages apps/api evaluator generator db, including tests in those trees"
+  },
+  "frontend": {
+    "lint": "passed",
+    "typecheck": "passed",
+    "production_build": "passed",
+    "playwright_retry": {
+      "passed": 1,
+      "failed": 1,
+      "not_run": 7,
+      "failure": "pagination-status element missing",
+      "initial_attempt": "network I/O suspended; retry passed first flow"
+    }
+  },
+  "clean_api_docker_build": {
+    "status": "failed",
+    "missing_copy_inputs": [
+      "prompts",
+      "evaluator_private"
+    ]
+  },
+  "migrations": "passed on isolated review database",
+  "direct_demo_flow_http_statuses": [
+    201,
+    200,
+    200
+  ],
+  "verify_claims": "passed existing checks; known evaluator blind spots remain",
+  "advisory_scans": {
+    "pnpm": {
+      "reported_dependencies": 447,
+      "reported_vulnerabilities": 0
+    },
+    "pip_audit": {
+      "production_dependencies": 38,
+      "reported_vulnerabilities": 0
+    }
+  },
+  "limits": [
+    "No live model quality or cost measured",
+    "Seven browser tests not reached",
+    "Not a full production security assessment",
+    "Benchmark supplied-generator findings must be interpreted with documented leakage and scoring limitations"
+  ]
+}

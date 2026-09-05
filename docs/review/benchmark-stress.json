@@ -1,0 +1,20 @@
+{
+  "dataset_id": "stress_99999",
+  "seed": 99999,
+  "scenario_counts": {
+    "clean_lifecycle": 800,
+    "batched_settlement": 200
+  },
+  "total_source_records": 10525,
+  "total_cases": 1000,
+  "processing_time_seconds": 14.055138,
+  "records_per_second": 748.84,
+  "cases_per_second": 71.15,
+  "p50_case_latency_ms": 0.8311,
+  "p95_case_latency_ms": 0.9511,
+  "peak_process_memory_mib": 150.22,
+  "measurement_scope": "ingestion through cash-position calculation; dataset generation excluded",
+  "memory_method": "OS peak resident set size for the benchmark process (approximate)",
+  "python_version": "3.13.12",
+  "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O"
+}

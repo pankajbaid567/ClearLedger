@@ -1,0 +1,650 @@
+{
+  "timing_original": {
+    "states": [
+      [
+        "CASE_T0031",
+        "PENDING_WITHIN_SLA",
+        null,
+        0,
+        [
+          "INV-004",
+          "INV-005"
+        ]
+      ]
+    ],
+    "edge_count": 2,
+    "cash": {
+      "buckets": {
+        "BANK_CONFIRMED": {
+          "bucket": "BANK_CONFIRMED",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "SETTLEMENT_CONFIRMED_IN_TRANSIT": {
+          "bucket": "SETTLEMENT_CONFIRMED_IN_TRANSIT",
+          "amount_paise": 47518,
+          "case_ids": [
+            "CASE_T0031"
+          ]
+        },
+        "EXPECTED_SETTLEMENT": {
+          "bucket": "EXPECTED_SETTLEMENT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "AT_RISK": {
+          "bucket": "AT_RISK",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "UNRESOLVED": {
+          "bucket": "UNRESOLVED",
+          "amount_paise": 0,
+          "case_ids": []
+        }
+      },
+      "bank_confirmed_paise": 0,
+      "settlement_confirmed_in_transit_paise": 47518,
+      "expected_settlement_paise": 0,
+      "at_risk_paise": 0,
+      "unresolved_paise": 0,
+      "scheduled_refunds_paise": 0,
+      "known_disputes_paise": 0,
+      "known_reserve_holds_paise": 0,
+      "safe_cash_paise": 47518
+    }
+  },
+  "timing_opaque": {
+    "states": [
+      [
+        "CASE_T0031",
+        "ACTIONABLE_EXCEPTION",
+        "BANK_CREDIT_MISSING",
+        47518,
+        [
+          "INV-004",
+          "INV-005"
+        ]
+      ]
+    ],
+    "edge_count": 2,
+    "cash": {
+      "buckets": {
+        "BANK_CONFIRMED": {
+          "bucket": "BANK_CONFIRMED",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "SETTLEMENT_CONFIRMED_IN_TRANSIT": {
+          "bucket": "SETTLEMENT_CONFIRMED_IN_TRANSIT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "EXPECTED_SETTLEMENT": {
+          "bucket": "EXPECTED_SETTLEMENT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "AT_RISK": {
+          "bucket": "AT_RISK",
+          "amount_paise": 47518,
+          "case_ids": [
+            "CASE_T0031"
+          ]
+        },
+        "UNRESOLVED": {
+          "bucket": "UNRESOLVED",
+          "amount_paise": 0,
+          "case_ids": []
+        }
+      },
+      "bank_confirmed_paise": 0,
+      "settlement_confirmed_in_transit_paise": 0,
+      "expected_settlement_paise": 0,
+      "at_risk_paise": 47518,
+      "unresolved_paise": 0,
+      "scheduled_refunds_paise": 0,
+      "known_disputes_paise": 0,
+      "known_reserve_holds_paise": 0,
+      "safe_cash_paise": 0
+    }
+  },
+  "batch_original": {
+    "states": [
+      [
+        "CASE_BATCH_0021",
+        "RECONCILED",
+        null,
+        0,
+        []
+      ]
+    ],
+    "edge_count": 9,
+    "cash": {
+      "buckets": {
+        "BANK_CONFIRMED": {
+          "bucket": "BANK_CONFIRMED",
+          "amount_paise": 475505,
+          "case_ids": [
+            "CASE_BATCH_0021"
+          ]
+        },
+        "SETTLEMENT_CONFIRMED_IN_TRANSIT": {
+          "bucket": "SETTLEMENT_CONFIRMED_IN_TRANSIT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "EXPECTED_SETTLEMENT": {
+          "bucket": "EXPECTED_SETTLEMENT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "AT_RISK": {
+          "bucket": "AT_RISK",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "UNRESOLVED": {
+          "bucket": "UNRESOLVED",
+          "amount_paise": 0,
+          "case_ids": []
+        }
+      },
+      "bank_confirmed_paise": 475505,
+      "settlement_confirmed_in_transit_paise": 0,
+      "expected_settlement_paise": 0,
+      "at_risk_paise": 0,
+      "unresolved_paise": 0,
+      "scheduled_refunds_paise": 0,
+      "known_disputes_paise": 0,
+      "known_reserve_holds_paise": 0,
+      "safe_cash_paise": 475505
+    }
+  },
+  "batch_order_amount_plus_1000": {
+    "states": [
+      [
+        "CASE_BATCH_0021",
+        "RECONCILED",
+        null,
+        0,
+        []
+      ]
+    ],
+    "edge_count": 8,
+    "cash": {
+      "buckets": {
+        "BANK_CONFIRMED": {
+          "bucket": "BANK_CONFIRMED",
+          "amount_paise": 475505,
+          "case_ids": [
+            "CASE_BATCH_0021"
+          ]
+        },
+        "SETTLEMENT_CONFIRMED_IN_TRANSIT": {
+          "bucket": "SETTLEMENT_CONFIRMED_IN_TRANSIT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "EXPECTED_SETTLEMENT": {
+          "bucket": "EXPECTED_SETTLEMENT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "AT_RISK": {
+          "bucket": "AT_RISK",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "UNRESOLVED": {
+          "bucket": "UNRESOLVED",
+          "amount_paise": 0,
+          "case_ids": []
+        }
+      },
+      "bank_confirmed_paise": 475505,
+      "settlement_confirmed_in_transit_paise": 0,
+      "expected_settlement_paise": 0,
+      "at_risk_paise": 0,
+      "unresolved_paise": 0,
+      "scheduled_refunds_paise": 0,
+      "known_disputes_paise": 0,
+      "known_reserve_holds_paise": 0,
+      "safe_cash_paise": 475505
+    }
+  },
+  "batch_order_merchant_conflict": {
+    "states": [
+      [
+        "CASE_BATCH_0021",
+        "RECONCILED",
+        null,
+        0,
+        []
+      ]
+    ],
+    "edge_count": 8,
+    "cash": {
+      "buckets": {
+        "BANK_CONFIRMED": {
+          "bucket": "BANK_CONFIRMED",
+          "amount_paise": 475505,
+          "case_ids": [
+            "CASE_BATCH_0021"
+          ]
+        },
+        "SETTLEMENT_CONFIRMED_IN_TRANSIT": {
+          "bucket": "SETTLEMENT_CONFIRMED_IN_TRANSIT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "EXPECTED_SETTLEMENT": {
+          "bucket": "EXPECTED_SETTLEMENT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "AT_RISK": {
+          "bucket": "AT_RISK",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "UNRESOLVED": {
+          "bucket": "UNRESOLVED",
+          "amount_paise": 0,
+          "case_ids": []
+        }
+      },
+      "bank_confirmed_paise": 475505,
+      "settlement_confirmed_in_transit_paise": 0,
+      "expected_settlement_paise": 0,
+      "at_risk_paise": 0,
+      "unresolved_paise": 0,
+      "scheduled_refunds_paise": 0,
+      "known_disputes_paise": 0,
+      "known_reserve_holds_paise": 0,
+      "safe_cash_paise": 475505
+    }
+  },
+  "clean_original": {
+    "states": [
+      [
+        "CASE_0001",
+        "RECONCILED",
+        null,
+        0,
+        []
+      ]
+    ],
+    "edge_count": 3,
+    "cash": {
+      "buckets": {
+        "BANK_CONFIRMED": {
+          "bucket": "BANK_CONFIRMED",
+          "amount_paise": 236481,
+          "case_ids": [
+            "CASE_0001"
+          ]
+        },
+        "SETTLEMENT_CONFIRMED_IN_TRANSIT": {
+          "bucket": "SETTLEMENT_CONFIRMED_IN_TRANSIT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "EXPECTED_SETTLEMENT": {
+          "bucket": "EXPECTED_SETTLEMENT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "AT_RISK": {
+          "bucket": "AT_RISK",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "UNRESOLVED": {
+          "bucket": "UNRESOLVED",
+          "amount_paise": 0,
+          "case_ids": []
+        }
+      },
+      "bank_confirmed_paise": 236481,
+      "settlement_confirmed_in_transit_paise": 0,
+      "expected_settlement_paise": 0,
+      "at_risk_paise": 0,
+      "unresolved_paise": 0,
+      "scheduled_refunds_paise": 0,
+      "known_disputes_paise": 0,
+      "known_reserve_holds_paise": 0,
+      "safe_cash_paise": 236481
+    }
+  },
+  "failed_settlement": {
+    "states": [
+      [
+        "CASE_0001",
+        "RECONCILED",
+        null,
+        0,
+        []
+      ]
+    ],
+    "edge_count": 3,
+    "cash": {
+      "buckets": {
+        "BANK_CONFIRMED": {
+          "bucket": "BANK_CONFIRMED",
+          "amount_paise": 236481,
+          "case_ids": [
+            "CASE_0001"
+          ]
+        },
+        "SETTLEMENT_CONFIRMED_IN_TRANSIT": {
+          "bucket": "SETTLEMENT_CONFIRMED_IN_TRANSIT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "EXPECTED_SETTLEMENT": {
+          "bucket": "EXPECTED_SETTLEMENT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "AT_RISK": {
+          "bucket": "AT_RISK",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "UNRESOLVED": {
+          "bucket": "UNRESOLVED",
+          "amount_paise": 0,
+          "case_ids": []
+        }
+      },
+      "bank_confirmed_paise": 236481,
+      "settlement_confirmed_in_transit_paise": 0,
+      "expected_settlement_paise": 0,
+      "at_risk_paise": 0,
+      "unresolved_paise": 0,
+      "scheduled_refunds_paise": 0,
+      "known_disputes_paise": 0,
+      "known_reserve_holds_paise": 0,
+      "safe_cash_paise": 236481
+    }
+  },
+  "component_payment_plus_1000": {
+    "states": [
+      [
+        "CASE_0001",
+        "RECONCILED",
+        null,
+        0,
+        []
+      ]
+    ],
+    "edge_count": 3,
+    "cash": {
+      "buckets": {
+        "BANK_CONFIRMED": {
+          "bucket": "BANK_CONFIRMED",
+          "amount_paise": 237481,
+          "case_ids": [
+            "CASE_0001"
+          ]
+        },
+        "SETTLEMENT_CONFIRMED_IN_TRANSIT": {
+          "bucket": "SETTLEMENT_CONFIRMED_IN_TRANSIT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "EXPECTED_SETTLEMENT": {
+          "bucket": "EXPECTED_SETTLEMENT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "AT_RISK": {
+          "bucket": "AT_RISK",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "UNRESOLVED": {
+          "bucket": "UNRESOLVED",
+          "amount_paise": 0,
+          "case_ids": []
+        }
+      },
+      "bank_confirmed_paise": 237481,
+      "settlement_confirmed_in_transit_paise": 0,
+      "expected_settlement_paise": 0,
+      "at_risk_paise": 0,
+      "unresolved_paise": 0,
+      "scheduled_refunds_paise": 0,
+      "known_disputes_paise": 0,
+      "known_reserve_holds_paise": 0,
+      "safe_cash_paise": 237481
+    }
+  },
+  "conflicting_bank_utr": {
+    "states": [
+      [
+        "CASE_0001",
+        "RECONCILED",
+        null,
+        0,
+        []
+      ]
+    ],
+    "edge_count": 3,
+    "cash": {
+      "buckets": {
+        "BANK_CONFIRMED": {
+          "bucket": "BANK_CONFIRMED",
+          "amount_paise": 236481,
+          "case_ids": [
+            "CASE_0001"
+          ]
+        },
+        "SETTLEMENT_CONFIRMED_IN_TRANSIT": {
+          "bucket": "SETTLEMENT_CONFIRMED_IN_TRANSIT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "EXPECTED_SETTLEMENT": {
+          "bucket": "EXPECTED_SETTLEMENT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "AT_RISK": {
+          "bucket": "AT_RISK",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "UNRESOLVED": {
+          "bucket": "UNRESOLVED",
+          "amount_paise": 0,
+          "case_ids": []
+        }
+      },
+      "bank_confirmed_paise": 236481,
+      "settlement_confirmed_in_transit_paise": 0,
+      "expected_settlement_paise": 0,
+      "at_risk_paise": 0,
+      "unresolved_paise": 0,
+      "scheduled_refunds_paise": 0,
+      "known_disputes_paise": 0,
+      "known_reserve_holds_paise": 0,
+      "safe_cash_paise": 236481
+    }
+  },
+  "refund": {
+    "states": [
+      [
+        "CASE_R0042",
+        "RECONCILED",
+        null,
+        0,
+        []
+      ]
+    ],
+    "edge_count": 3,
+    "cash": {
+      "buckets": {
+        "BANK_CONFIRMED": {
+          "bucket": "BANK_CONFIRMED",
+          "amount_paise": -8641,
+          "case_ids": [
+            "CASE_R0042"
+          ]
+        },
+        "SETTLEMENT_CONFIRMED_IN_TRANSIT": {
+          "bucket": "SETTLEMENT_CONFIRMED_IN_TRANSIT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "EXPECTED_SETTLEMENT": {
+          "bucket": "EXPECTED_SETTLEMENT",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "AT_RISK": {
+          "bucket": "AT_RISK",
+          "amount_paise": 0,
+          "case_ids": []
+        },
+        "UNRESOLVED": {
+          "bucket": "UNRESOLVED",
+          "amount_paise": 0,
+          "case_ids": []
+        }
+      },
+      "bank_confirmed_paise": -8641,
+      "settlement_confirmed_in_transit_paise": 0,
+      "expected_settlement_paise": 0,
+      "at_risk_paise": 0,
+      "unresolved_paise": 0,
+      "scheduled_refunds_paise": 366199,
+      "known_disputes_paise": 0,
+      "known_reserve_holds_paise": 0,
+      "safe_cash_paise": -374840
+    },
+    "bank_statement_net": -8641,
+    "refund_components": 366199
+  },
+  "metric_original": {
+    "relationship_precision": 1.0,
+    "relationship_recall": 1.0,
+    "relationship_f1": 1.0,
+    "relationship_true_positive_count": 257,
+    "relationship_predicted_count": 257,
+    "relationship_expected_count": 257,
+    "case_state_accuracy": 1.0,
+    "exception_code_accuracy": 1.0,
+    "cash_bucket_accuracy": 1.0,
+    "stp_rate": 0.7067,
+    "stp_reconciled_case_count": 53,
+    "monetary_reconciliation_rate": 0.7642,
+    "reconciled_gross_amount_paise": 16314538,
+    "total_gross_amount_paise": 21348487,
+    "false_positive_count": 0,
+    "false_positive_amount_paise": 0,
+    "hidden_row_count": 0,
+    "unexplained_residual_paise": 0,
+    "open_exception_residual_paise": 2827091,
+    "throughput_records_per_second": null,
+    "total_predicted_cases": 75,
+    "total_truth_cases": 75
+  },
+  "metric_zero_allocations_and_corrupt_money": {
+    "relationship_precision": 1.0,
+    "relationship_recall": 1.0,
+    "relationship_f1": 1.0,
+    "relationship_true_positive_count": 257,
+    "relationship_predicted_count": 257,
+    "relationship_expected_count": 257,
+    "case_state_accuracy": 1.0,
+    "exception_code_accuracy": 1.0,
+    "cash_bucket_accuracy": 1.0,
+    "stp_rate": 0.7067,
+    "stp_reconciled_case_count": 53,
+    "monetary_reconciliation_rate": 0.7642,
+    "reconciled_gross_amount_paise": 16314538,
+    "total_gross_amount_paise": 21348487,
+    "false_positive_count": 0,
+    "false_positive_amount_paise": 0,
+    "hidden_row_count": 0,
+    "unexplained_residual_paise": 0,
+    "open_exception_residual_paise": 2827091,
+    "throughput_records_per_second": null,
+    "total_predicted_cases": 75,
+    "total_truth_cases": 75
+  },
+  "metric_duplicated_predictions": {
+    "relationship_precision": 1.0,
+    "relationship_recall": 1.0,
+    "relationship_f1": 1.0,
+    "relationship_true_positive_count": 257,
+    "relationship_predicted_count": 257,
+    "relationship_expected_count": 257,
+    "case_state_accuracy": 2.0,
+    "exception_code_accuracy": 1.0,
+    "cash_bucket_accuracy": 2.0,
+    "stp_rate": 0.7067,
+    "stp_reconciled_case_count": 106,
+    "monetary_reconciliation_rate": 1.5284,
+    "reconciled_gross_amount_paise": 32629076,
+    "total_gross_amount_paise": 21348487,
+    "false_positive_count": 0,
+    "false_positive_amount_paise": 0,
+    "hidden_row_count": 0,
+    "unexplained_residual_paise": 0,
+    "open_exception_residual_paise": 5654182,
+    "throughput_records_per_second": null,
+    "total_predicted_cases": 150,
+    "total_truth_cases": 75
+  },
+  "metric_unknown_reconciled_case": {
+    "relationship_precision": 1.0,
+    "relationship_recall": 1.0,
+    "relationship_f1": 1.0,
+    "relationship_true_positive_count": 257,
+    "relationship_predicted_count": 257,
+    "relationship_expected_count": 257,
+    "case_state_accuracy": 1.0,
+    "exception_code_accuracy": 1.0,
+    "cash_bucket_accuracy": 1.0,
+    "stp_rate": 0.7105,
+    "stp_reconciled_case_count": 54,
+    "monetary_reconciliation_rate": 0.7642,
+    "reconciled_gross_amount_paise": 16314538,
+    "total_gross_amount_paise": 21348487,
+    "false_positive_count": 0,
+    "false_positive_amount_paise": 0,
+    "hidden_row_count": 0,
+    "unexplained_residual_paise": 0,
+    "open_exception_residual_paise": 2827091,
+    "throughput_records_per_second": null,
+    "total_predicted_cases": 76,
+    "total_truth_cases": 75
+  },
+  "metric_empty_predictions": {
+    "relationship_precision": 1.0,
+    "relationship_recall": 0.0,
+    "relationship_f1": 0.0,
+    "relationship_true_positive_count": 0,
+    "relationship_predicted_count": 0,
+    "relationship_expected_count": 257,
+    "case_state_accuracy": 0.0,
+    "exception_code_accuracy": 0.0,
+    "cash_bucket_accuracy": 0.0,
+    "stp_rate": 0.0,
+    "stp_reconciled_case_count": 0,
+    "monetary_reconciliation_rate": 0.0,
+    "reconciled_gross_amount_paise": 0,
+    "total_gross_amount_paise": 21348487,
+    "false_positive_count": 0,
+    "false_positive_amount_paise": 0,
+    "hidden_row_count": 75,
+    "unexplained_residual_paise": 0,
+    "open_exception_residual_paise": 0,
+    "throughput_records_per_second": null,
+    "total_predicted_cases": 0,
+    "total_truth_cases": 75
+  }
+}
